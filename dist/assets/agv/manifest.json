@@ -1,0 +1,14 @@
+{
+  "assetId": "agv-glb",
+  "type": "vehicle",
+  "format": "glb",
+  "units": "centimeter",
+  "uri": "/assets/agv/agv.glb",
+  "runtimeScale": 0.01,
+  "lod": [
+    {
+      "level": 0,
+      "uri": "/assets/agv/agv.glb"
+    }
+  ]
+}

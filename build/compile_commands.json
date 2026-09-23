@@ -1,0 +1,38 @@
+[
+{
+  "directory": "/Users/floder/Downloads/yangshan_phase4_tos_cargo_lifecycle 2/build",
+  "command": "/usr/bin/clang++  -I\"/Users/floder/baidu/ wasm-src/include\" -g -std=gnu++20 -arch arm64 -O3 -o CMakeFiles/spatial.dir/src/bindings.cpp.o -c \"/Users/floder/baidu/ wasm-src/src/bindings.cpp\"",
+  "file": "/Users/floder/baidu/ wasm-src/src/bindings.cpp",
+  "output": "CMakeFiles/spatial.dir/src/bindings.cpp.o"
+},
+{
+  "directory": "/Users/floder/Downloads/yangshan_phase4_tos_cargo_lifecycle 2/build",
+  "command": "/usr/bin/clang++  -I\"/Users/floder/baidu/ wasm-src/include\" -g -std=gnu++20 -arch arm64 -O3 -o CMakeFiles/spatial.dir/src/tile_decoder.cpp.o -c \"/Users/floder/baidu/ wasm-src/src/tile_decoder.cpp\"",
+  "file": "/Users/floder/baidu/ wasm-src/src/tile_decoder.cpp",
+  "output": "CMakeFiles/spatial.dir/src/tile_decoder.cpp.o"
+},
+{
+  "directory": "/Users/floder/Downloads/yangshan_phase4_tos_cargo_lifecycle 2/build",
+  "command": "/usr/bin/clang++  -I\"/Users/floder/baidu/ wasm-src/include\" -g -std=gnu++20 -arch arm64 -O3 -o CMakeFiles/spatial.dir/src/decoder.cpp.o -c \"/Users/floder/baidu/ wasm-src/src/decoder.cpp\"",
+  "file": "/Users/floder/baidu/ wasm-src/src/decoder.cpp",
+  "output": "CMakeFiles/spatial.dir/src/decoder.cpp.o"
+},
+{
+  "directory": "/Users/floder/Downloads/yangshan_phase4_tos_cargo_lifecycle 2/build",
+  "command": "/usr/bin/clang++  -I\"/Users/floder/baidu/ wasm-src/include\" -g -std=gnu++20 -arch arm64 -O3 -o CMakeFiles/spatial.dir/src/coordinate.cpp.o -c \"/Users/floder/baidu/ wasm-src/src/coordinate.cpp\"",
+  "file": "/Users/floder/baidu/ wasm-src/src/coordinate.cpp",
+  "output": "CMakeFiles/spatial.dir/src/coordinate.cpp.o"
+},
+{
+  "directory": "/Users/floder/Downloads/yangshan_phase4_tos_cargo_lifecycle 2/build",
+  "command": "/usr/bin/clang++  -I\"/Users/floder/baidu/ wasm-src/include\" -g -std=gnu++20 -arch arm64 -O3 -o CMakeFiles/spatial.dir/src/culling.cpp.o -c \"/Users/floder/baidu/ wasm-src/src/culling.cpp\"",
+  "file": "/Users/floder/baidu/ wasm-src/src/culling.cpp",
+  "output": "CMakeFiles/spatial.dir/src/culling.cpp.o"
+},
+{
+  "directory": "/Users/floder/Downloads/yangshan_phase4_tos_cargo_lifecycle 2/build",
+  "command": "/usr/bin/clang++  -I\"/Users/floder/baidu/ wasm-src/include\" -g -std=gnu++20 -arch arm64 -O3 -o CMakeFiles/spatial.dir/src/lod.cpp.o -c \"/Users/floder/baidu/ wasm-src/src/lod.cpp\"",
+  "file": "/Users/floder/baidu/ wasm-src/src/lod.cpp",
+  "output": "CMakeFiles/spatial.dir/src/lod.cpp.o"
+}
+]

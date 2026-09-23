@@ -1,0 +1,3 @@
+/Users/floder/Downloads/yangshan_phase4_tos_cargo_lifecycle 2/build/CMakeFiles/spatial.dir
+/Users/floder/Downloads/yangshan_phase4_tos_cargo_lifecycle 2/build/CMakeFiles/edit_cache.dir
+/Users/floder/Downloads/yangshan_phase4_tos_cargo_lifecycle 2/build/CMakeFiles/rebuild_cache.dir

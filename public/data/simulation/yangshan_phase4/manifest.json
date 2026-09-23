@@ -1,0 +1,20 @@
+{
+  "scenario": "yangshan_phase4_tos_agv_synthetic",
+  "anchor": {
+    "longitude": 122.032722,
+    "latitude": 30.658429
+  },
+  "agvCount": 155,
+  "businessData": "/data/simulation/yangshan_phase4/TOS_STA_AGV_CNTR_INFOS.json",
+  "fleetData": "/data/simulation/yangshan_phase4/agv_fleet.json",
+  "routeData": "/data/simulation/yangshan_phase4/agv_routes_gis.json",
+  "trajectoryData": "/data/simulation/yangshan_phase4/AGV_TRAJECTORY.json",
+  "asset": "/assets/agv/agv.glb",
+  "synthetic": true,
+  "gisSource": {
+    "containerPolygons": "/data/gis/container_yards.geojson",
+    "roadNetwork": "/data/gis/road_network.geojson",
+    "routeData": "/data/simulation/yangshan_phase4/agv_routes_gis.json",
+    "description": "jizhuangxiangport polygons are used as container-yard areas; AGV trajectories are deterministic synthetic samples constrained to these polygons."
+  }
+}

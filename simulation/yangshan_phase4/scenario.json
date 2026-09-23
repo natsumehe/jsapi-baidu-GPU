@@ -1,0 +1,20 @@
+{
+  "name": "Yangshan Port Phase IV AGV synthetic scenario",
+  "center": { "longitude": 122.032722, "latitude": 30.658429 },
+  "agvCount": 155,
+  "process": [
+    "quay pickup",
+    "loaded transport",
+    "yard handoff",
+    "assigned parking",
+    "automatic battery swap / replenishment",
+    "return to quay"
+  ],
+  "synthetic": true,
+  "coordinateSystem": {
+    "type": "local-enu",
+    "origin": { "longitude": 122.032722, "latitude": 30.658429, "height": 0 }
+  },
+  "roadNetwork": "synthetic road centerlines shaped from the provided Yangshan Phase IV satellite image; every route is constrained to these centerlines",
+  "note": "The TOS-shaped work records and AGV longitude/latitude trajectories are synthetic data for rendering and performance testing, not official production records or surveyed AGV lane-centerline data."
+}

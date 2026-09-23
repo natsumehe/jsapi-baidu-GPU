@@ -1,0 +1,12 @@
+{
+  "name": "ningbo-zhoushan-port-demo",
+  "format": "port-point-binary-v1",
+  "levels": [0, 1],
+  "tileRange": {
+    "x": [-1, 1],
+    "y": [-1, 1]
+  },
+  "tileSize": 5000,
+  "version": 1,
+  "note": "Synthetic demonstration tiles. Replace with offline-compiled production tiles."
+}
