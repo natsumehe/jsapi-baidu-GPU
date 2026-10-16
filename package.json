@@ -7,7 +7,17 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "wasm:build": "emcmake cmake -S wasm-src -B wasm-build && cmake --build wasm-build -j"
+    "wasm:build": "emcmake cmake -S wasm-src -B wasm-build && cmake --build wasm-build -j",
+    "typecheck": "tsc --noEmit",
+    "test:domain": "node scripts/test-domain.cjs",
+    "test:integration": "node scripts/test-integration.cjs",
+    "test": "npm run test:lab && npm run test:domain && npm run test:integration",
+    "test:lab": "node --test tests/*.test.mjs",
+    "bench:node": "node scripts/measure-lab.mjs",
+    "scenario:generate": "node scripts/generate-port-layout.mjs",
+    "test:port": "node --test tests/port-geometry.test.mjs",
+    "lab:stream:build": "node scripts/build-lab-stream-data.mjs",
+    "lab:stream:measure": "node scripts/measure-http-stream.mjs"
   },
   "dependencies": {},
   "devDependencies": {

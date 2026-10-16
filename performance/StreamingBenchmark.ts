@@ -1,5 +1,15 @@
 export type BenchmarkSize = 10_000 | 100_000 | 500_000 | 1_000_000;
 
+export interface BenchmarkRenderStats {
+    drawCalls: number;
+    bufferUploadMs: number;
+    bufferBytes: number;
+    gpuTimeMs: number;
+    pointObjects: number;
+    lineObjects: number;
+    polygonObjects: number;
+}
+
 export interface BenchmarkResult {
     datasetSize: number;
     firstRenderMs: number;
@@ -14,6 +24,8 @@ export interface BenchmarkResult {
     cpuMainThreadPct: number;
     gpuTimeMs: number;
     memoryMB: number | null;
+    mode: "streaming" | "monolithic";
+    render: BenchmarkRenderStats;
 }
 
 export interface BenchmarkSink {
@@ -27,6 +39,7 @@ export interface BenchmarkSink {
     endBenchmark(): void;
     redraw(): void;
     getBenchmarkGpuTimeMs?: () => number;
+    getBenchmarkStats?: () => BenchmarkRenderStats;
 }
 
 interface WorkerChunk {
@@ -112,9 +125,8 @@ export class StreamingBenchmark {
         try {
             for (let start = 0; start < size; start += this.chunkSize) {
                 const count = Math.min(this.chunkSize, size - start);
-                const before = performance.now();
-
                 const chunk = await this.generate(start, count, size);
+                const before = performance.now();
 
                 // worker -> main -> GPU upload. Each chunk yields back to requestAnimationFrame below,
                 // so large datasets remain incrementally visible instead of blocking the browser.
@@ -194,6 +206,16 @@ export class StreamingBenchmark {
         return results;
     }
 
+    /**
+     * A/B：streaming pipeline vs Fetch-All/Decode-All/Render-All。
+     * 用于竞赛报告，不在生产页面显示。
+     */
+    async runAB(size: BenchmarkSize): Promise<{ streaming: BenchmarkResult; monolithic: BenchmarkResult }> {
+        const streaming = await this.run(size);
+        const monolithic = await this.runMonolithic(size);
+        return { streaming, monolithic };
+    }
+
     getResults(): BenchmarkResult[] {
         return SIZES
             .map(size => this.results.get(size))
@@ -241,8 +263,8 @@ export class StreamingBenchmark {
                 } else if (this.benchmarkPhase === "interaction") {
                     this.interactionFrameSamples.push(dt);
                 }
-                // 以 16.67ms 为 60FPS 基线，作为“主线程帧时间压力”代理。
-                this.cpuBusyMs += Math.min(dt, 50);
+                // Frame intervals are not main-thread CPU utilisation.
+                // Do not include idle/wait time in the synchronous-work estimate.
             }
 
             this.frameRaf = requestAnimationFrame(tick);
@@ -258,7 +280,7 @@ export class StreamingBenchmark {
         }
     }
 
-    private buildResult(): BenchmarkResult {
+    private buildResult(mode: "streaming" | "monolithic" = "streaming"): BenchmarkResult {
         const loadDuration =
             Math.max(0.001, this.loadingEndedAt - this.startedAt);
 
@@ -272,11 +294,11 @@ export class StreamingBenchmark {
             Math.floor(sorted.length * 0.01)
         );
         const p1FPS = sorted.length ? sorted[p1Index] : 0;
-        const avgFPS = fps.length
-            ? fps.reduce((a, b) => a + b, 0) / fps.length
+        const avgFPS = this.loadingFrameSamples.length
+            ? 1000 * this.loadingFrameSamples.length / this.loadingFrameSamples.reduce((a, b) => a + b, 0)
             : 0;
-        const interactionFPS = interactionFPSValues.length
-            ? interactionFPSValues.reduce((a, b) => a + b, 0) / interactionFPSValues.length
+        const interactionFPS = this.interactionFrameSamples.length
+            ? 1000 * this.interactionFrameSamples.length / this.interactionFrameSamples.reduce((a, b) => a + b, 0)
             : 0;
 
         // 浏览器无法可靠获得系统级 CPU/GPU 百分比。
@@ -309,8 +331,84 @@ export class StreamingBenchmark {
             objectsPerSecond: this.activeSize / (loadDuration / 1000),
             cpuMainThreadPct,
             gpuTimeMs: this.getGpuTime(),
-            memoryMB
+            memoryMB,
+            mode,
+            render: this.getRenderStats()
         };
+    }
+
+    private getRenderStats(): BenchmarkRenderStats {
+        const stats = this.sink.getBenchmarkStats?.();
+        return stats ?? {
+            drawCalls: 0, bufferUploadMs: 0, bufferBytes: 0, gpuTimeMs: this.getGpuTime(),
+            pointObjects: 0, lineObjects: 0, polygonObjects: 0
+        };
+    }
+
+    private async runMonolithic(size: BenchmarkSize): Promise<BenchmarkResult> {
+        if (this.running) throw new Error("Benchmark is already running.");
+        this.running = true;
+        this.activeSize = size;
+        this.startedAt = performance.now();
+        this.firstRenderAt = 0;
+        this.loadingEndedAt = 0;
+        this.receivedBytes = 0;
+        this.cpuBusyMs = 0;
+        this.chunkIndex = 0;
+        this.loadingFrameSamples.length = 0;
+        this.interactionFrameSamples.length = 0;
+        this.benchmarkPhase = "loading";
+        this.startFrameProbe();
+
+        try {
+            const chunks: WorkerChunk[] = [];
+            for (let start = 0; start < size; start += this.chunkSize) {
+                const count = Math.min(this.chunkSize, size - start);
+                const chunk = await this.generate(start, count, size);
+                this.receivedBytes += chunk.positions.byteLength + chunk.colors.byteLength + chunk.primitives.byteLength;
+                chunks.push(chunk);
+                this.chunkIndex++;
+            }
+
+            const totalPositions = chunks.reduce((n, c) => n + c.positions.byteLength, 0);
+            const totalColors = chunks.reduce((n, c) => n + c.colors.byteLength, 0);
+            const totalPrimitives = chunks.reduce((n, c) => n + c.primitives.byteLength, 0);
+            const positions = new Float32Array(totalPositions / 4);
+            const colors = new Uint8Array(totalColors);
+            const primitives = new Uint8Array(totalPrimitives);
+            let po = 0, co = 0, ro = 0;
+            for (const chunk of chunks) {
+                const p = new Float32Array(chunk.positions);
+                const c = new Uint8Array(chunk.colors);
+                const r = new Uint8Array(chunk.primitives);
+                positions.set(p, po); po += p.length;
+                colors.set(c, co); co += c.length;
+                primitives.set(r, ro); ro += r.length;
+            }
+
+            const beforeUpload = performance.now();
+            this.sink.beginBenchmark(size);
+            const accepted = this.sink.appendBenchmarkChunk(positions, colors, primitives, size);
+            this.sink.redraw();
+            this.firstRenderAt = performance.now();
+            this.cpuBusyMs += this.firstRenderAt - beforeUpload;
+            this.loadingEndedAt = this.firstRenderAt;
+            this.benchmarkPhase = "interaction";
+            const interactionStart = performance.now();
+            while (performance.now() - interactionStart < 2000) await this.nextFrame();
+            const result = this.buildResult("monolithic");
+            result.render.gpuTimeMs = this.getGpuTime();
+            result.receivedMB = this.receivedBytes / 1024 / 1024;
+            result.chunks = this.chunkIndex;
+            result.firstRenderMs = Math.max(0, this.firstRenderAt - this.startedAt);
+            result.loadTimeMs = Math.max(0, this.loadingEndedAt - this.startedAt);
+            result.objectsPerSecond = size / Math.max(0.001, result.loadTimeMs / 1000);
+            return result;
+        } finally {
+            this.stopFrameProbe();
+            this.sink.endBenchmark();
+            this.running = false;
+        }
     }
 
     private getGpuTime(): number {

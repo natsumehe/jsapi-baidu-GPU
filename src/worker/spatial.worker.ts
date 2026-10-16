@@ -1,124 +1,59 @@
 import { WasmEngine } from "../wasm/WasmEngine";
-import type { DecodedTile } from "../data/runtime/TileTypes";
-
 const wasm = new WasmEngine();
 let wasmReady = false;
-
-self.onmessage = async (
-    event: MessageEvent
-) => {
-    const message = event.data;
-
-    if (message?.type !== "decode-tile") {
-        return;
-    }
-
-    try {
-        if (!wasmReady) {
-            wasmReady = await wasm.initialize();
-        }
-
-        const result: DecodedTile =
-            wasmReady
-                ? wasm.decodeTile(
-                    message.buffer,
-                    message.tileId
-                )
-                : decodeTileFallback(
-                    message.buffer,
-                    message.tileId
-                );
-
-        ((self as unknown) as { postMessage(message: unknown, transfer?: Transferable[]): void }).postMessage(
-            {
-                type: "decoded",
-                id: message.id,
-                tileId: result.id,
-                count: result.count,
-                positions: result.positions.buffer,
-                colors: result.colors.buffer
-            },
-            [
-                result.positions.buffer,
-                result.colors.buffer
-            ]
-        );
-    } catch (error) {
-        self.postMessage({
-            type: "error",
-            id: message.id,
-            error:
-                error instanceof Error
-                    ? error.message
-                    : String(error)
-        });
-    }
-};
-
-function decodeTileFallback(
-    buffer: ArrayBuffer,
-    id: string
-): DecodedTile {
-    const view = new DataView(buffer);
-    const HEADER_SIZE = 24;
-    const RECORD_SIZE = 16;
-    const MAGIC = 0x504f5254;
-
-    if (buffer.byteLength < HEADER_SIZE) {
-        throw new Error(
-            "Tile is smaller than the 24-byte header."
-        );
-    }
-
-    if (view.getUint32(0, true) !== MAGIC) {
-        throw new Error("Invalid PORT tile magic.");
-    }
-
-    const count = view.getUint32(8, true);
-    const required =
-        HEADER_SIZE +
-        count * RECORD_SIZE;
-
-    if (required > buffer.byteLength) {
-        throw new Error("Tile is truncated.");
-    }
-
-    const positions =
-        new Float32Array(count * 3);
-
-    const colors =
-        new Uint8Array(count * 4);
-
-    let offset = HEADER_SIZE;
-
-    for (let i = 0; i < count; i++) {
-        positions[i * 3] =
-            view.getFloat32(offset, true);
-
-        positions[i * 3 + 1] =
-            view.getFloat32(offset + 4, true);
-
-        positions[i * 3 + 2] =
-            view.getFloat32(offset + 8, true);
-
-        colors[i * 4] =
-            view.getUint8(offset + 12);
-
-        colors[i * 4 + 1] =
-            view.getUint8(offset + 13);
-
-        colors[i * 4 + 2] =
-            view.getUint8(offset + 14);
-
-        colors[i * 4 + 3] = 255;
-
-        offset += RECORD_SIZE;
-    }
-
-    return {
-        id,
-        count,
-        positions,
-        colors
-    };
+const HEADER = 24, RECORD = 16, MAGIC = 0x504f5254;
+interface StreamState { tileId:string; tail:Uint8Array; expected:number|null; decoded:number; }
+const streams = new Map<number,StreamState>();
+function emit(id:number,s:StreamState,bytes:Uint8Array) {
+ const n = Math.floor(bytes.byteLength/RECORD);
+ if(!n)return;
+ const positions=new Float32Array(n*3),colors=new Uint8Array(n*4);
+ const v=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+ for(let i=0;i<n;i++){const o=i*RECORD;positions.set([v.getFloat32(o,true),v.getFloat32(o+4,true),v.getFloat32(o+8,true)],i*3);colors.set([v.getUint8(o+12),v.getUint8(o+13),v.getUint8(o+14),255],i*4);}
+ self.postMessage({type:"decoded-chunk",id,tileId:s.tileId,offset:s.decoded,count:n,positions:positions.buffer,colors:colors.buffer},[positions.buffer,colors.buffer]);
+ s.decoded+=n;
 }
+self.onmessage=async (event:MessageEvent)=>{
+ const m=event.data;
+ try {
+  if(m.type==="stream-start"){streams.set(m.id,{tileId:m.tileId,tail:new Uint8Array(0),expected:null,decoded:0});self.postMessage({type:"stream-ready",id:m.id});return;}
+  if(m.type==="stream-cancel"){streams.delete(m.id);return;}
+  if(m.type==="stream-chunk"){
+   const s=streams.get(m.id);if(!s)return;
+   const incoming=new Uint8Array(m.chunk);
+   const combined=new Uint8Array(s.tail.length+incoming.length);
+   combined.set(s.tail);combined.set(incoming,s.tail.length);
+   let start=0;
+   if(s.expected===null){
+    if(combined.length<HEADER){s.tail=combined;self.postMessage({type:"chunk-ack",id:m.id});return;}
+    const v=new DataView(combined.buffer);
+    if(v.getUint32(0,true)!==MAGIC||v.getUint32(4,true)!==1)throw Error("Invalid PORT tile header/version");
+    s.expected=v.getUint32(8,true);
+    if(s.expected>10_000_000)throw Error("Tile record limit exceeded");
+    start=HEADER;
+   }
+   const remaining=s.expected-s.decoded;
+   const complete=Math.min(remaining,Math.floor((combined.length-start)/RECORD));
+   const end=start+complete*RECORD;
+   emit(m.id,s,combined.subarray(start,end));
+   s.tail=combined.slice(end);
+   if(s.tail.length && s.decoded===s.expected)throw Error("Unexpected trailing tile bytes");
+   self.postMessage({type:"chunk-ack",id:m.id});return;
+  }
+  if(m.type==="stream-finish"){
+   const s=streams.get(m.id);if(!s)return;
+   streams.delete(m.id);
+   if(s.expected===null||s.decoded!==s.expected||s.tail.length)throw Error("Incomplete PORT tile stream");
+   self.postMessage({type:"decoded",id:m.id,tileId:s.tileId,count:s.decoded,positions:new ArrayBuffer(0),colors:new ArrayBuffer(0)});return;
+  }
+  if(m.type==="decode-tile"){
+   if(!wasmReady)wasmReady=await wasm.initialize();
+   const b=new Uint8Array(m.buffer),v=new DataView(m.buffer);
+   if(b.length<HEADER||v.getUint32(0,true)!==MAGIC||v.getUint32(4,true)!==1)throw Error("Invalid PORT tile");
+   const count=v.getUint32(8,true);
+   if(count>10_000_000||HEADER+count*RECORD!==b.length)throw Error("Invalid tile length");
+   if(wasmReady){const r=wasm.decodeTile(m.buffer,m.tileId);self.postMessage({type:"decoded",id:m.id,tileId:r.id,count:r.count,positions:r.positions.buffer,colors:r.colors.buffer},[r.positions.buffer,r.colors.buffer]);}
+   else {const s:StreamState={tileId:m.tileId,tail:new Uint8Array(),expected:count,decoded:0};emit(m.id,s,b.subarray(HEADER));self.postMessage({type:"decoded",id:m.id,tileId:m.tileId,count,positions:new ArrayBuffer(0),colors:new ArrayBuffer(0)});}
+  }
+ }catch(e){streams.delete(m.id);self.postMessage({type:"error",id:m.id,error:e instanceof Error?e.message:String(e)});}
+};

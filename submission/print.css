@@ -1,0 +1,31 @@
+@page { size: A4; margin: 22mm 20mm 21mm 20mm; @top-left { content: "洋山港四期 · V9 技术作品说明"; color:#64748b; font:9pt 'Noto Sans CJK SC'; } @top-right { content:"WebGPU × Baidu JSAPI 4.0"; color:#64748b; font:9pt 'Noto Sans CJK SC';} @bottom-left {content:"作品说明 · 2026.10"; color:#8091a4; font:9pt 'Noto Sans CJK SC';} @bottom-right {content:"第 " counter(page) " 页"; color:#8091a4; font:9pt 'Noto Sans CJK SC';} }
+@page:first { margin:0; @top-left{content:none;} @top-right{content:none;} @bottom-left{content:none;} @bottom-right{content:none;} }
+html{font-family:'Noto Sans CJK SC','Noto Sans CJK JP','Microsoft YaHei',sans-serif;color:#243246; font-size:10pt;line-height:1.72;}
+body{margin:0;} p { margin:0 0 10px; text-align:justify; orphans:2;widows:2; }
+header#title-block-header {height:297mm;box-sizing:border-box; padding:55mm 25mm 20mm; margin:0; background:linear-gradient(158deg,#102e52 0%,#144d76 52%,#237c9b 100%);color:white;page-break-after:always; position:relative;}
+header#title-block-header:before {content:'YANGSHAN  PHASE IV';font-size:12pt;letter-spacing:4px;color:#a8e4ef;display:block;margin-bottom:16mm;border-bottom:1px solid #75b2ca;padding-bottom:6mm;}
+header#title-block-header h1.title{font-size:31pt;line-height:1.3;color:white;border:0;margin:0 0 10mm;letter-spacing:.7pt;}
+header#title-block-header p.subtitle{font-size:15pt;color:#d8eef8;line-height:1.65;margin:0 0 40mm; max-width:150mm;}
+header#title-block-header p.date{font-size:13pt;color:#d9eefb;}
+header#title-block-header:after{content:'项目架构  /  数据链路  /  设计模式  /  性能验证  /  竞赛交付';font-size:12pt;color:#cfecfb;position:absolute;bottom:33mm;left:25mm;right:20mm;border-top:1px solid #78b3cf;padding-top:8mm;}
+nav#TOC {break-after:page; margin-top:5mm;} nav#TOC:before{content:'目录 · CONTENTS';display:block;font-size:22pt;font-weight:700;color:#133b63;margin:5mm 0 8mm;padding-bottom:4mm;border-bottom:3px solid #149cc0;} nav#TOC ul{padding-left:20px;} nav#TOC li{padding:2px 0;line-height:1.8;} nav#TOC a{text-decoration:none;color:#235b83;}
+h1{font-size:21pt;line-height:1.38;color:#143f63;margin:15mm 0 6mm;break-after:avoid;border-left:5px solid #32a7c7;padding-left:4mm;}
+h2{font-size:15pt;line-height:1.4;color:#17577b;margin:10mm 0 4mm;break-after:avoid;}
+h3{font-size:11.5pt;line-height:1.4;color:#0a7387;margin:7mm 0 3mm;break-after:avoid;}
+h1,h2,h3{page-break-after:avoid;} ul,ol{margin:0 0 10px;padding-left:22px;} li{margin-bottom:3px;} li p{margin:0;}
+blockquote{background:#f0f7fc;border-left:4px solid #2a97b5;margin:9px 0 13px;padding:11px 15px;border-radius:0 6px 6px 0;color:#36546a;}
+table{width:100%;border-collapse:collapse;table-layout:auto;margin:11px 0 15px;font-size:8.45pt;line-height:1.55;}
+th{background:#eaf3f9;color:#124466;text-align:left;font-weight:700;border:1px solid #c4d8e5;padding:7px 8px;}
+td{border:1px solid #d3e1ea;padding:6px 8px;vertical-align:top;word-wrap:break-word;}tr:nth-child(even) td{background:#f7fbfe;}
+tr{break-inside:avoid;}
+pre{white-space:pre-wrap; overflow-wrap:anywhere;line-height:1.42;font:8pt 'DejaVu Sans Mono','Noto Sans Mono',monospace;background:#112d45;color:#e5f1fa;border-radius:6px;padding:12px 14px;margin:11px 0;break-inside:avoid;}
+code{font:8.7pt 'DejaVu Sans Mono','Noto Sans Mono',monospace;background:#f0f4f8;color:#145b78;padding:1px 3px;border-radius:3px;word-break:break-word;}
+pre code{background:transparent;color:inherit;padding:0;}
+img{max-width:100%;max-height:116mm;object-fit:contain;display:block;margin:10px auto 12px;}
+figure{margin:10px 0 18px;}figcaption{font-size:9pt;color:#53697a;text-align:center;}
+a{color:#126b9d;text-decoration:none;}hr{border:0;border-top:1px solid #cbdde7;margin:15mm 0;}
+strong{font-weight:700;color:#123d59;}
+header#title-block-header strong{color:white;}
+@media print{a[href]:after{content:none;}}
+
+nav#TOC h2#toc-title{display:none;}

@@ -6,17 +6,25 @@ export class FPSMonitor {
         performance.now();
 
     private fps = 0;
+    private running = false;
+    private frameId: number | null = null;
 
     start(): void {
+        if (this.running) return;
+        this.running = true;
+        this.last = performance.now();
+        this.frameId = requestAnimationFrame(this.tick);
+    }
 
-        requestAnimationFrame(
-            this.tick
-        );
+    stop(): void {
+        this.running = false;
+        if (this.frameId !== null) cancelAnimationFrame(this.frameId);
+        this.frameId = null;
     }
 
     private tick =
         (time: number) => {
-
+            if (!this.running) return;
             this.frames++;
 
             const elapsed =
@@ -41,9 +49,7 @@ export class FPSMonitor {
                 this.updateUI();
             }
 
-            requestAnimationFrame(
-                this.tick
-            );
+            this.frameId = requestAnimationFrame(this.tick);
         };
 
     getFPS(): number {

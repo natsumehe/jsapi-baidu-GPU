@@ -1,80 +1,45 @@
-import type { AGVPhase, AGVSegment } from "../runtime/AGVFleetRuntime";
-import { SpatialConstraint } from "../../gis/SpatialConstraint";
-
-export interface GISRoutePoint {
-    longitude: number;
-    latitude: number;
-    x: number;
-    y: number;
-}
-
-export interface GISRoutePhase {
-    phase: AGVPhase;
-    speedMps: number;
-    dwellSeconds: number;
-    areaId?: string;
-    points: GISRoutePoint[];
-}
-
+import type { AGVPhase } from '../runtime/AGVFleetRuntime';
+import { loadPortGeometry } from '../../simulation/yangshan/PortGeometry';
+export interface GISRoutePoint { longitude:number;latitude:number;x:number;y:number }
+export interface GISRoutePhase { phase:AGVPhase;speedMps:number;dwellSeconds:number;areaId?:string;points:GISRoutePoint[] }
 export interface GISAGVRoute {
-    routeId: string;
-    agvId: string;
-    synthetic: boolean;
-    source: string;
-    routeBasis: string;
-    containerAreaIds: string[];
-    phases: GISRoutePhase[];
+    routeId:string;agvId:string;synthetic:boolean;source:string;routeBasis:string;
+    containerAreaIds:string[];yardId:string;quayCraneId:string;trafficVerified?:boolean;
+    unloadingPoint:GISRoutePoint;parkingPoint:GISRoutePoint;phases:GISRoutePhase[];
 }
-
 interface GISRouteDataset {
-    synthetic: boolean;
-    routeCount: number;
-    coordinateSystem?: { type?: string };
-    routes: GISAGVRoute[];
+    synthetic:boolean;routeCount:number;
+    coordinateSystem:{type?:string};routes:GISAGVRoute[];
 }
-
+const close=(a:GISRoutePoint,b:GISRoutePoint)=>Math.hypot(a.x-b.x,a.y-b.y)<.02;
+/** Validate endpoint role and phases; the generation tests separately enforce
+ * every segment excludes the container-yard footprint. Do not silently load old routes.
+ */
 export class AGVGisRouteSource {
-    constructor(
-        private readonly url = "/data/simulation/yangshan_phase4/agv_routes_gis.json"
-    ) {}
-
-    async load(signal?: AbortSignal): Promise<Map<string, GISAGVRoute>> {
-        const response = await fetch(this.url, { signal, cache: "no-cache" });
-        if (!response.ok) {
-            throw new Error(`GIS AGV route request failed: ${response.status}`);
-        }
-
-        const dataset = await response.json() as GISRouteDataset;
-        if (!dataset.synthetic || dataset.coordinateSystem?.type !== "BD09/local-meter" || !Array.isArray(dataset.routes) || dataset.routes.length !== 155) {
-            throw new Error("Invalid GIS AGV route dataset.");
-        }
-
-        const [operationalGeo, containerGeo] = await Promise.all([
-            fetch("/data/gis/operational_polygons.geojson", { signal, cache: "no-cache" }).then(r => r.json()),
-            fetch("/data/gis/container_yards.geojson", { signal, cache: "no-cache" }).then(r => r.json())
-        ]);
-        // Container-yard polygons are EXCLUSION zones. AGVs drive in the free-space
-        // lanes BETWEEN the 集装箱 blocks, so the driving envelope is the operational
-        // polygons and the container blocks are cut out as forbidden areas.
-        const constraint = new SpatialConstraint(operationalGeo, containerGeo);
-
-        const map = new Map<string, GISAGVRoute>();
-        for (const route of dataset.routes) {
-            if (!route.agvId || route.phases.length !== 5) continue;
-            const valid = route.phases.every(phase => constraint.validateRoute(
-                phase.points.map(point => ({ lng: point.longitude, lat: point.latitude }))
-            ));
-            // A handful of chords graze a container corner by well under a metre at
-            // the coarse validation step; the crane anchor also sits at a block edge.
-            // That is a visualization-level tolerance, not a reason to drop the route.
-            if (!valid) {
-                console.warn(`[Yangshan GIS] ${route.routeId} has samples grazing a container edge; keeping the free-space lifecycle route.`);
+    constructor(private readonly url='/data/simulation/yangshan_phase4/agv_routes_gis.json'){}
+    async load(signal?:AbortSignal):Promise<Map<string,GISAGVRoute>>{
+        const [response,layout]=await Promise.all([fetch(this.url,{signal,cache:'no-cache'}),loadPortGeometry(signal)]);
+        if(!response.ok)throw Error(`GIS AGV route request failed: ${response.status}`);
+        const data=await response.json() as GISRouteDataset;
+        if(!data.synthetic||data.coordinateSystem?.type!=='BD09/local-meter'||data.routes.length!==155)
+            throw Error('Invalid GIS AGV route dataset');
+        const phases:AGVPhase[]=['QUAY_PICKUP','YARD_STACK','RETURN_BUFFER','PARKING','CHARGING'];
+        const result=new Map<string,GISAGVRoute>();
+        for(const route of data.routes){
+            const yard=layout.yards.find(y=>y.id===route.yardId);
+            const q=layout.quayCranes.find(c=>`QC-${String(c.id).padStart(2,'0')}`===route.quayCraneId);
+            if(!yard||!q||route.phases.length!==5 || !phases.every((p,i)=>p===route.phases[i]?.phase))throw Error(`Invalid route roles: ${route.agvId}`);
+            const [pickup,loaded,empty,waiting,charging]=route.phases;
+            if(!close(pickup.points[0],route.parkingPoint)||!close(pickup.points.at(-1)!,q.position)||
+                !close(loaded.points[0],q.position)||!close(loaded.points.at(-1)!,yard.unload)||
+                !close(empty.points[0],yard.unload)||!close(empty.points.at(-1)!,route.parkingPoint)||
+                !close(waiting.points[0],route.parkingPoint)||!close(charging.points[0],route.parkingPoint)){
+                throw Error(`Wrong terminal handoff / buffer endpoint: ${route.agvId}`);
             }
-            map.set(route.agvId, route);
+            if(result.has(route.agvId))throw Error(`Duplicate AGV ID ${route.agvId}`);
+            result.set(route.agvId,route);
         }
-        if (map.size !== 155) {
-            throw new Error(`Expected 155 GIS routes, received ${map.size}.`);
-        }
-        return map;
+        if(result.size!==155)throw Error(`Expected 155 GIS routes, got ${result.size}`);
+        return result;
     }
 }

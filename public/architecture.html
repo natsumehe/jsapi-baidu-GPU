@@ -1,0 +1,187 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>V9 技术架构 · UTF-8</title><style>body{margin:0;background:#0e182a;color:#e8f1fb;font:15px/1.85 'Noto Sans CJK SC','Microsoft YaHei',sans-serif}main{max-width:1060px;margin:auto;padding:36px 28px 90px}h1,h2{color:#75d2f4}h1{font-size:29px}h2{margin-top:40px}a{color:#8edff9}table{border-collapse:collapse;width:100%;font-size:14px;display:block;overflow-x:auto}td,th{padding:9px 12px;border:1px solid #3b5674;text-align:left;vertical-align:top}th{background:#203950}code,pre{background:#1a324e;color:#b6e4ff;border-radius:4px}code{padding:2px 4px}pre{padding:15px;overflow:auto}pre code{padding:0}img{width:100%;max-height:530px;object-fit:contain;background:#f5faff;border-radius:12px;margin:18px 0}blockquote{border-left:3px solid #64c2e6;padding:8px 16px;background:#182d43}.nav{border-bottom:1px solid #35516a;padding:0 0 20px;margin:0 0 25px}.nav a{margin-right:28px}</style></head><body><main><div class="nav"><a href="/">港口主场景</a><a href="/lab.html">空间实验室</a><a href="/docs/ARCHITECTURE_TECHNICAL.md">Markdown 简介</a></div><h1 id="v9-代码架构与设计模式索引">V9 代码架构与设计模式索引</h1>
+<blockquote>
+<p>海量空间数据实验平台 · 当前有效结构（不含 V1–V8 历史发布笔记）</p>
+</blockquote>
+<figure>
+<img src="/diagrams/system.svg" alt="系统架构" />
+<figcaption aria-hidden="true">系统架构</figcaption>
+</figure>
+<h2 id="架构决策">架构决策</h2>
+<ol type="1">
+<li><strong>场景只定义负载</strong>：港口模型、AGV、堆场数据均由
+<code>src/simulation/</code>、<code>src/data/runtime/</code>
+驱动，空间处理算法不依赖港口实体的业务属性。</li>
+<li><strong>分层</strong>：入口/展示 → 应用协调 → 空间数据与计算 →
+地图/渲染 Adapter → 指标与回归。</li>
+<li><strong>两个入口</strong>：<code>/</code> 使用百度 JSAPI 主场景及
+<code>SpatialEngine</code>；<code>/lab.html</code>
+使用独立、可离线复现的 <code>lab/</code>
+模块。尚未共享全部加载实现，不声称完全统一。</li>
+<li><strong>地图、计算和渲染三种 Adapter</strong>：Baidu JSAPI
+负责地理坐标与相机；WebGPU 用于计算策略；WebGL
+绘制图元，三个模块不互为替代。</li>
+<li><strong>数据单向 + 控制反馈</strong>：空间数据单向送
+GPU；应用统计网络读取、Worker
+吞吐及帧耗时，反向调整分块或触发重绘。</li>
+<li><strong>结果完整记录</strong>：A/B/E/C/D
+显示真实设备支持情况；WebGPU 不可用即标记 N/A，不转用 CPU 冒称 GPU
+结果。</li>
+</ol>
+<h2 id="目录-职责-关键调用">目录 → 职责 → 关键调用</h2>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>模块</th>
+<th>文件入口</th>
+<th>代码关系</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>主应用</td>
+<td><code>src/main.ts</code></td>
+<td>加载百度 JSAPI 后初始化 <code>PortApplication</code></td>
+</tr>
+<tr class="even">
+<td>主场景编排</td>
+<td><code>src/app/PortApplication.ts</code></td>
+<td>初始化
+<code>BaiduMap</code>、<code>SpatialEngine</code>、FPSMonitor；TOS
+插件默认关闭</td>
+</tr>
+<tr class="odd">
+<td>地图适配</td>
+<td><code>src/map/BaiduMap.ts</code>,
+<code>BaiduWebGLLayerAdapter.ts</code></td>
+<td>地图视角/图层与 WebGL 叠加</td>
+</tr>
+<tr class="even">
+<td>空间引擎</td>
+<td><code>src/engine/SpatialEngine.ts</code></td>
+<td>TileSelector → Pipeline → Worker/WASM → Buffer/Overlay</td>
+</tr>
+<tr class="odd">
+<td>空间索引</td>
+<td><code>src/spatial/</code></td>
+<td>QuadTree、可视 Tile 选择</td>
+</tr>
+<tr class="even">
+<td>数据管道</td>
+<td><code>src/data/pipeline</code>, <code>src/data/scheduler</code></td>
+<td>下载/解码、任务优先级、取消/背压</td>
+</tr>
+<tr class="odd">
+<td>运行时</td>
+<td><code>src/data/runtime/AGVFleetRuntime.ts</code></td>
+<td>每车路径、运动学、避让、历史轨迹</td>
+</tr>
+<tr class="even">
+<td>港区路网</td>
+<td><code>src/simulation/yangshan/YangshanPhase4Network.ts</code></td>
+<td>多对多岸桥/Gantry 候选图与几何约束</td>
+</tr>
+<tr class="odd">
+<td>港口渲染</td>
+<td><code>src/renderer/webgl/AGVWorldOverlay.ts</code></td>
+<td>轨迹、GLB、箱堆、点击高亮</td>
+</tr>
+<tr class="even">
+<td>CPU/WebGPU</td>
+<td><code>src/renderer/webgpu/</code></td>
+<td>可选 WebGPU AABB；失败 fallback 必须显式报告</td>
+</tr>
+<tr class="odd">
+<td>独立实验室</td>
+<td><code>lab/main.mjs</code></td>
+<td>创建 Renderer、Benchmark、Map 与 HTTP 流组件</td>
+</tr>
+<tr class="even">
+<td>生成数据</td>
+<td><code>lab/dataset.mjs</code> + <code>dataset.worker.mjs</code></td>
+<td>可复现 point/line/polygon 数据</td>
+</tr>
+<tr class="odd">
+<td>实验编排</td>
+<td><code>lab/benchmark.mjs</code></td>
+<td>A/B/E/C/D 参数、数据块、指标、取消</td>
+</tr>
+<tr class="even">
+<td>实验图元</td>
+<td><code>lab/renderer.mjs</code></td>
+<td><code>POINTS</code>/<code>LINES</code>/<code>TRIANGLES</code> 与
+VBO</td>
+</tr>
+<tr class="odd">
+<td>WebGPU</td>
+<td><code>lab/gpu.mjs</code></td>
+<td>Compute、GPU 结果回读、计算墙钟时间</td>
+</tr>
+<tr class="even">
+<td>地图混合</td>
+<td><code>lab/map.mjs</code></td>
+<td>Offline / Baidu、变换、相机/视口</td>
+</tr>
+<tr class="odd">
+<td>HTTP 流</td>
+<td><code>lab/http-stream.mjs</code>、<code>stream-codec.mjs</code></td>
+<td><code>ReadableStream</code> 分片解码与增量上传</td>
+</tr>
+<tr class="even">
+<td>验证</td>
+<td><code>tests/*.test.mjs</code></td>
+<td>路网几何、点线面、Worker 流、AGV 与配置</td>
+</tr>
+</tbody>
+</table>
+<h2 id="agv-单车执行路径">AGV 单车执行路径</h2>
+<pre class="text"><code>停车位 / 当前任务终点
+    ↓
+AGVFleetRuntime.dispatchTask()
+    ↓
+chooseVariant() → findQuayPath() / corridorCost()
+    ↓
+QUAY_PICKUP → YARD_STACK → RETURN_QUAY → RETURN_BUFFER
+    ↓
+运动学 stepVehicle() / 车身占地避让
+    ↓
+AGVWorldOverlay 绘图；对象点击读取状态与历史</code></pre>
+<p>路线为合成 GIS
+约束路线，不是测绘真实单向车道；不具备工业级交通安全认证。</p>
+<h2 id="分块实验执行路径">分块实验执行路径</h2>
+<pre class="text"><code>固定 seed / size / geometry
+  ├── A: MainThread → WebGL（批量）
+  ├── B: Worker → WebGL（流式）
+  ├── E: Worker → CPU AABB → WebGL
+  ├── C: Worker → WebGPU AABB → readback → CPU compact → WebGL
+  └── D: C + 自适应 Chunk 预算</code></pre>
+<p>注意 C 和 D 的 GPU 回读与 CPU compact 不是零成本；和 E
+的公平对照必须比较端到端。<code>lab/benchmark.mjs</code> 的 Chunk
+反馈只是受限的负载调节原型，尚非完整分布式调度或生产环境 Tile LOD
+反馈器。</p>
+<h2 id="需要避免的架构误解">需要避免的架构误解</h2>
+<ul>
+<li>业务港口工作流不是 JSAPI/WebGPU 系统的控制核心。</li>
+<li>WebGPU 与 JSAPI 不是两种可以相互替换的 SDK；负责不同层面。</li>
+<li><code>.glb</code> 港口模型场景与 <code>lab.html</code>
+百万抽象点线面实验的性能口径不同。</li>
+<li>实验室中只在初次计算裁剪视口，C/D
+不具备任意地图漫游自动补齐全部剔除对象的生产能力。</li>
+<li><code>reports/node-data-benchmark.json</code> 仅为 Node CPU/Worker
+生成基准，不代表浏览器 GPU 性能。</li>
+</ul>
+<h2 id="旧-md-的整理原则">旧 MD 的整理原则</h2>
+<p>本提交副本仅保留一个根
+<code>README.md</code>、本技术索引、可复现实验协议、作品说明书和视频脚本。旧的
+<code>RELEASE_V4.md</code>、<code>RELEASE_V8.md</code>、<code>RELEASE_V9.md</code>、<code>README_COMPETITION.md</code>
+以及各轮临时架构与回归 Markdown 不再放入当前提交树。Git
+原有提交历史无需删除。</p>
+<p>为兼容已有 UTF-8
+测试，<code>public/docs/ARCHITECTURE_TECHNICAL.md</code>
+作为当前说明的精简公开副本保留；<code>public/architecture.html</code>
+是实验室“架构文档”的可浏览 HTML 入口。</p>
+</main></body></html>

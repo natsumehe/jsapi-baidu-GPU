@@ -21,7 +21,8 @@ const phaseColor: Record<AGVPhase, RGBA> = {
     YARD_STACK: { r: 1.00, g: 0.67, b: 0.15, a: 0.95 },
     PARKING: { r: 0.20, g: 0.58, b: 1.00, a: 0.95 },
     CHARGING: { r: 0.40, g: 0.72, b: 1.00, a: 0.98 },
-    RETURN_QUAY: { r: 0.85, g: 0.36, b: 0.95, a: 0.92 }
+    RETURN_BUFFER: { r: 0.85, g: 0.36, b: 0.95, a: 0.92 },
+    RETURN_QUAY: { r: 0.90, g: 0.75, b: 0.22, a: 0.92 }
 };
 
 const lineVertex = `

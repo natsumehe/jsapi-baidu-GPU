@@ -1,0 +1,17 @@
+services:
+  yangshan-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      BAIDU_MAP_AK: ${BAIDU_MAP_AK:?set BAIDU_MAP_AK in .env}
+    ports:
+      # Host 443/8080/8090 are already occupied by geo-go.
+      # Keep this service private and let the existing 443 reverse proxy route to it.
+      - "127.0.0.1:18173:80"
+    mem_limit: 768m
+    cpus: "1.50"
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true

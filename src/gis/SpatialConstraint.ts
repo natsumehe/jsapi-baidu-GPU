@@ -43,9 +43,10 @@ export class SpatialConstraint {
 
     /**
      * `allowedGeoJSON` is the driving envelope. For the Yangshan AGV model this is
-     * the operational polygons: AGVs drive in the free-space lanes BETWEEN the
-     * 集装箱 blocks. `forbiddenGeoJSON` is the container-yard polygons, cut out as
-     * exclusion zones so no trajectory ever crosses a block.
+     * the union of the operational polygons and the container-yard polygons: AGVs
+     * operate INSIDE the 集装箱 blocks, so those polygons are part of the allowed
+     * area rather than exclusion zones. `forbiddenGeoJSON` is optional and only used
+     * when a caller genuinely needs cut-out holes.
      */
     constructor(allowedGeoJSON: GeoJSONFeatureCollection, forbiddenGeoJSON?: GeoJSONFeatureCollection) {
         this.allowed = extractPolygons(allowedGeoJSON);

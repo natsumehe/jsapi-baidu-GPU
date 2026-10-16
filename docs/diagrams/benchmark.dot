@@ -1,0 +1,10 @@
+digraph G {
+ graph [rankdir=LR,bgcolor="transparent",nodesep=.26,ranksep=.36,pad=.25,fontname="Noto Sans CJK SC"];
+ node [shape=box,style="rounded,filled",fontname="Noto Sans CJK SC",fillcolor="#eaf3fa",color="#a7cfe8",fontsize=11,margin=".14,.11"];
+ edge [color="#457897",arrowsize=.65];
+ DATA [label="相同 Seed / 对象数\nPoint / Line / Polygon / Mixed",fillcolor="#cfebfb"];
+ A [label="A 主线程\n批量 WebGL"]; B [label="B Worker\n逐块 WebGL"]; E [label="E Worker + CPU\nAABB 裁剪"]; C [label="C Worker + WebGPU\nAABB 裁剪"]; D [label="D C + 动态\nChunk 预算"];
+ OUT [label="统一统计\n首批可见 / P95 / FPS\nCompute / Upload / 内存",fillcolor="#e6f5d9"];
+ DATA -> A; DATA -> B; DATA -> E; DATA -> C; DATA -> D;
+ A -> OUT; B -> OUT; E -> OUT; C -> OUT; D -> OUT;
+}

@@ -24,6 +24,8 @@ export class BaiduWebGLLayerAdapter {
     private initialized = false;
     private mapContainer: HTMLElement | null = null;
     private resizeObserver: ResizeObserver | null = null;
+    private baiduCanvasLayer: any = null;
+    private usingBaiduCanvasLayer = false;
 
     constructor(map: BMapGL.Map, origin: GeoPoint = { longitude: 121.8, latitude: 29.95, height: 0 }) {
         this.map = map;
@@ -37,38 +39,88 @@ export class BaiduWebGLLayerAdapter {
         if (!this.mapContainer) throw new Error("Baidu map container #map_container was not found.");
         if (getComputedStyle(this.mapContainer).position === "static") this.mapContainer.style.position = "relative";
 
-        const canvas = document.createElement("canvas");
-        canvas.className = "baidu-custom-point-layer";
-        Object.assign(canvas.style, {
-            position: "absolute",
-            left: "0",
-            top: "0",
-            width: "100%",
-            height: "100%",
-            pointerEvents: "none",
-            zIndex: "9990"
-        });
-        this.mapContainer.appendChild(canvas);
-        this.canvas = canvas;
-
-        const gl = canvas.getContext("webgl", { alpha: true, antialias: true, depth: false, preserveDrawingBuffer: false });
-        if (!gl) {
-            canvas.remove();
-            this.canvas = null;
-            throw new Error("Failed to create WebGL context for point overlay.");
-        }
-        this.gl = gl;
-        this.pointLayer = new PointLayer(gl);
-        // Benchmark layer 使用独立 VBO，避免影响现有 AGV / 场景数据。
+        // AGV/GIS overlay is the primary visualization and renders on its own 2D
+        // canvas, so it must come up regardless of whether the optional point-cloud
+        // WebGL context can be created (some GPU-constrained environments allow zero
+        // app-created WebGL contexts beyond Baidu's own map context).
         this.agvOverlay = new AGVWorldOverlay(this.map, this.origin);
-
         this.resizeObserver = new ResizeObserver(() => this.render());
         this.resizeObserver.observe(this.mapContainer);
         this.initialized = true;
 
         void this.agvOverlay.initialize(() => this.render());
         this.agvOverlay.start();
+
+        // Optional point/benchmark WebGL layer. Its absence must never tear down the
+        // already-running AGV/GIS overlay.
+        const gl = this.acquireWebGLContext();
+        if (gl) {
+            this.gl = gl;
+            this.pointLayer = new PointLayer(gl);
+        } else {
+            console.warn("[BaiduWebGLLayerAdapter] Point-overlay WebGL 上下文不可用；AGV/GIS 叠加层继续运行，仅关闭点云/基准层。");
+        }
+
         this.render();
+    }
+
+    private acquireWebGLContext(): WebGLRenderingContext | null {
+        const attributes: WebGLContextAttributes = {
+            alpha: true, antialias: true, depth: false, preserveDrawingBuffer: false
+        };
+        const createGL = (canvas: HTMLCanvasElement): WebGLRenderingContext | null =>
+            (canvas.getContext("webgl", attributes) ||
+                canvas.getContext("experimental-webgl", attributes)) as WebGLRenderingContext | null;
+
+        const BMap = (window as any).BMapGL;
+
+        // 优先复用 Baidu JSAPI 的 CanvasLayer 生命周期。但部分 JSAPI 构建要么不支持
+        // 自定义 CanvasLayer（addLayer 报 unknown layer type），要么其 canvas 已被内部
+        // getContext('2d') 占用——canvas 只能绑定一种上下文，此时 getContext('webgl')
+        // 恒为 null。任一情况都必须回退到受控 DOM canvas，否则整个 overlay（含 AGV）
+        // 都会因抛错而无法初始化。
+        if (typeof BMap?.CanvasLayer === "function") {
+            try {
+                const layer = new BMap.CanvasLayer({
+                    zIndex: 9990,
+                    update: () => this.render()
+                });
+                this.map.addLayer(layer);
+                const layerCanvas = (layer.canvas ?? null) as HTMLCanvasElement | null;
+                const gl = layerCanvas ? createGL(layerCanvas) : null;
+                if (gl && layerCanvas) {
+                    this.baiduCanvasLayer = layer;
+                    this.usingBaiduCanvasLayer = true;
+                    this.canvas = layerCanvas;
+                    return gl;
+                }
+                try {
+                    this.map.removeLayer(layer);
+                } catch {
+                    layer.remove?.();
+                }
+            } catch (error) {
+                console.warn("[BaiduWebGLLayerAdapter] Baidu CanvasLayer 不可用，回退到 DOM canvas。", error);
+            }
+        }
+
+        // 受控 fallback：绝对定位的 overlay canvas，随地图容器尺寸变化，
+        // 由 onCameraChanged / ResizeObserver / AGV 循环驱动重绘。
+        const canvas = document.createElement("canvas");
+        canvas.className = "baidu-custom-point-layer";
+        Object.assign(canvas.style, {
+            position: "absolute", left: "0", top: "0", width: "100%", height: "100%",
+            pointerEvents: "none", zIndex: "9990"
+        });
+        this.mapContainer!.appendChild(canvas);
+        const gl = createGL(canvas);
+        if (!gl) {
+            canvas.remove();
+            return null;
+        }
+        this.canvas = canvas;
+        this.usingBaiduCanvasLayer = false;
+        return gl;
     }
 
     setAGVState(_state: Partial<AGVState>): void { this.render(); }
@@ -76,43 +128,12 @@ export class BaiduWebGLLayerAdapter {
     getAGVState(): AGVRuntimeState | null {
         const state = this.agvOverlay?.getSelectedState();
         if (!state) return null;
-        return {
-            id: state.id,
-            assetId: state.assetId,
-            x: state.x,
-            y: state.y,
-            longitude: state.longitude,
-            latitude: state.latitude,
-            heading: state.heading,
-            speed: state.speed,
-            battery: state.battery,
-            phase: state.phase,
-            berthId: state.berthId,
-            yardId: state.yardId,
-            parkingSlotId: state.parkingSlotId,
-            energyStationId: state.energyStationId,
-            taskId: state.taskId,
-            routeId: state.routeId,
-            containerId: state.containerId,
-            containerNo: state.containerNo,
-            cargoStatus: state.cargoStatus,
-            phaseProgress: state.phaseProgress,
-            taskStatus: state.taskStatus,
-            cycleProgress: state.cycleProgress,
-            yardX: state.yardX,
-            yardY: state.yardY,
-            cargoX: state.cargoX,
-            cargoY: state.cargoY,
-            cargoVisible: state.cargoVisible,
-            cargoAtYard: state.cargoAtYard,
-            cargoTransferProgress: state.cargoTransferProgress,
-            cargoTransferKind: state.cargoTransferKind
-        };
+        return { ...state };
     }
 
     getAGVFleetStats() {
         return this.agvOverlay?.getStats() ?? {
-            total: 0, moving: 0, parking: 0, charging: 0, returnQuay: 0, yardStack: 0,
+            total: 0, active: 0, waiting: 0, moving: 0, parking: 0, charging: 0, returnBuffer: 0, yardStack: 0,
             avgBattery: 0, loaded: false, error: "not initialized", simulationRunning: false,
             simulationSpeed: 1, modelLoaded: false, modelError: null
         };
@@ -145,7 +166,17 @@ export class BaiduWebGLLayerAdapter {
         this.benchmarkCapacity = 0;
         this.agvOverlay?.destroy();
         this.agvOverlay = null;
-        this.canvas?.remove();
+        if (this.baiduCanvasLayer) {
+            try {
+                this.map.removeLayer(this.baiduCanvasLayer);
+            } catch {
+                this.baiduCanvasLayer.remove?.();
+            }
+        } else {
+            this.canvas?.remove();
+        }
+        this.baiduCanvasLayer = null;
+        this.usingBaiduCanvasLayer = false;
         this.canvas = null;
         this.gl = null;
         this.mapContainer = null;
@@ -210,6 +241,14 @@ export class BaiduWebGLLayerAdapter {
 
     getBenchmarkGpuTimeMs(): number {
         return this.benchmarkLayer?.getStats().gpuTimeMs ?? 0;
+    }
+
+    getBenchmarkStats() {
+        return this.benchmarkLayer?.getStats() ?? {
+            objects: 0, vertices: 0, capacityVertices: 0, gpuTimeMs: 0,
+            drawCalls: 0, bufferUploadMs: 0, bufferBytes: 0,
+            pointObjects: 0, lineObjects: 0, polygonObjects: 0
+        };
     }
 
     private projectPositionsToClipSpace(

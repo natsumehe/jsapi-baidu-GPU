@@ -1,103 +1,53 @@
-# 洋山港四期 · AGV 运行态势（Free Space Streaming / TOS Cargo Lifecycle）
+# 洋山港四期 · 海量空间数据可视化实验平台（V9）
 
-基于 **百度地图 JSAPI 4.0 (BMapGL) + WebGL/WebGPU** 的港口 AGV 运行态势可视化 Demo。
-在真实地图底图之上叠加 155 台 AGV 的全生命周期运行轨迹、集装箱装卸交接动画，
-以及可流式加载的空间 Tile 数据管线。
+**Baidu Map JSAPI 4.0 × WebGL × WebGPU × Worker/WASM × HTTP Streaming**
 
-> 纯前端项目（`vite` + `TypeScript`），无后端。所有数据均为**合成演示数据**，
-> 位于 `public/data/` 下，运行时通过 HTTP 直接读取。
+本作品研究 **50 万～100 万抽象空间对象**在地图上的分块加载、空间裁剪、绘制与性能对照。洋山港岸桥、155 辆 AGV、Gantry 和集装箱堆场是带空间约束的合成演示场景，**不是生产 TOS 或真实车道控制系统**。
 
----
+![分层技术架构](docs/diagrams/system.svg)
 
-## 快速开始
+## 立即体验
 
-前置要求：**Node.js ≥ 18**（已在 Node 24 上验证）。
+| 入口 | URL | 说明 |
+|---|---|---|
+| 港口主场景 | `http://localhost:5173/` | 百度地图 + 动态设备，**需要合法 AK** |
+| 空间计算实验室 | `http://localhost:5173/lab.html` | 点/线/面/Mixed、A/B/E/C/D、HTTP 流，可离线 |
+| 免 AK 场景预览 | `http://localhost:5173/port-preview.html` | 港口离线几何与设备运行预览 |
+| 技术架构 HTML | `http://localhost:5173/architecture.html` | UTF-8 可直接阅读 |
 
 ```bash
-# 1. 安装依赖（node_modules 已随包提供，可跳过）
-npm install
-
-# 2. 启动开发服务器（默认 http://localhost:5173）
+npm ci
+npm run typecheck
+npm test
 npm run dev
-
-# 3. 生产构建（输出到 dist/）
-npm run build
-
-# 4. 预览生产构建
-npm run preview
 ```
 
-启动后浏览器打开 `http://localhost:5173`。页面顶部中央的状态条会依次显示：
+不安装 npm 也可在仓库根目录运行 `python3 -m http.server 4173`，打开 `http://localhost:4173/lab.html`（独立实验室）。
 
-```
-页面正在启动 → 渲染链路已启动 · Baidu Map + GIS + 155 AGV
-```
+配置真实百度底图：在 `public/config.js` 配置有效且域名授权的 `baiduMapAk`。**勿提交私人密钥和账号凭证。**
 
-出现后者即代表整条渲染链路（地图 + GIS + AGV 车队）已就绪。
+## 技术亮点
 
-### 需要联网
+- **分层 + Adapter**：地图、计算、渲染各司其职，WebGPU 不替换百度 SDK。
+- **流式加载**：Worker 分块生成及真实 HTTP `ReadableStream` 两类实验，逐块上传 WebGL。
+- **点线面真实绘制**：Point → `POINTS`；LineString → `LINES`；Polygon → `TRIANGLES`。
+- **CPU/GPU 公平对比**：A、B、E、C、D 五组，E 为 CPU AABB 对照，C 为包含回读的 WebGPU 方案。
+- **复杂动态压力场景**：155 AGV 按车、按任务独立规划；多对多 QC/Gantry 任务；模拟历史/全任务轨迹/点击高亮。
 
-`index.html` 通过 `<script>` 引入百度地图 JSAPI（含内置 AK）：
+## 项目结构
 
-```html
-<script src="https://api.map.baidu.com/api?v=4.0&ak=..."></script>
-```
+`src/`：港口可视化与原空间引擎；`lab/`：可独立运行的空间性能实验室；`public/`：GLB、GIS、Tile、HTTP 大数据文件；`tests/`：自动化测试；`scripts/`：场景生成与测量；`docs/`：当前技术架构和实验协议；`submission/`：正式说明书与录屏脚本。
 
-因此**首次加载需要能访问 `api.map.baidu.com`**。若地图底图空白，多为网络/AK 问题，
-但 AGV/GIS 叠加层被设计为**独立降级**——即使空间 Tile 或 WebGPU 不可用，车队叠加层仍会渲染。
+## 作品交付
 
----
+- **作品介绍**：[V9 作品说明书 Markdown](submission/作品说明书_V9.md) · [PDF](submission/作品说明书_V9.pdf)
+- **代码架构**：[设计模式与源码关系](docs/CODE_ARCHITECTURE.md)
+- **评测方案**：[A/B/E/C/D 与可复现性](docs/BENCHMARK_REPRODUCIBILITY.md)
+- **演示视频**：[分镜与讲解脚本](submission/演示视频脚本_V9.md) · **视频链接待录制后填写**
+- **GitHub 仓库 URL**：`<填写你现有的 GitHub 仓库地址>`
 
-## npm 脚本
+## 验证边界
 
-| 命令 | 作用 |
-| --- | --- |
-| `npm run dev` | 启动 Vite 开发服务器（HMR），监听 `0.0.0.0:5173` |
-| `npm run build` | `tsc` 类型检查 + `vite build` 生产打包到 `dist/` |
-| `npm run preview` | 本地预览 `dist/` 产物 |
-| `npm run wasm:build` | 用 Emscripten 编译 `wasm-src/`（可选，需自备 emcc 工具链） |
+V9 原有 `npm run typecheck` 与 `npm test` 已通过：50 项 Node 测试，以及领域和数据源集成测试。**真实百度地图/WebGPU 浏览器性能仍须在你的硬件环境中完成；Node CPU/Worker 测试不得当成 GPU 加速结论。**
 
----
-
-## 目录结构
-
-```
-├─ index.html                 # 入口页面 + 全部 HUD（态势面板 / 图例 / 数据表）
-├─ vite.config.ts             # Vite 配置（端口 5173、ES2022、Worker=ES module）
-├─ tsconfig.json              # 严格模式 TypeScript
-├─ src/                       # 前端渲染 / 数据管线源码（消费层）
-├─ public/                    # 运行时静态资源，Vite 原样映射到 URL 根
-│  ├─ assets/agv/             # AGV 三维模型（agv.glb）+ manifest
-│  └─ data/                   # GIS / 仿真 / Tile 数据（见下）
-├─ simulation/yangshan_phase4/# 独立的仿真 / 数据生产层（可重新生成数据）
-├─ scripts/                   # GIS 配准 / 路线生成脚本
-├─ performance/               # FPS 监控 + 流式渲染 Benchmark
-├─ wasm-src/                  # 空间计算 WASM 源码（C++/CMake，可选）
-└─ docs/                      # 详细文档（见 docs/README.md）
-```
-
-数据目录 `public/data/`：
-
-| 路径 | 内容 |
-| --- | --- |
-| `gis/*.geojson` | 集装箱堆场、道路、运营 Polygon、岸桥点（含 `_derived` 派生几何） |
-| `simulation/yangshan_phase4/` | AGV 车队、GIS 约束路线、时序轨迹、TOS 作业箱信息表 |
-| `tiles/{z}/{x}/{y}.bin` | 合成的空间点云二进制 Tile（流式管线演示） |
-| `assets/agv/agv.glb` | AGV 三维模型 |
-
----
-
-## 详细文档
-
-完整的架构说明、数据流、生命周期状态机与二次开发指南见 **[`docs/README.md`](docs/README.md)**。
-
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 渲染链路与模块职责
-- [`docs/DATA.md`](docs/DATA.md) — 数据格式、来源与重新生成
-- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — 本地开发、构建、排错
-
----
-
-## 免责声明
-
-本项目所有 AGV 轨迹、TOS 作业记录、道路中心线均为**根据卫星影像结构建立的演示级合成数据**，
-不代表洋山港四期官方生产数据或真实车道中心线。地图底图 AK 仅用于本 Demo 演示。
+本仓库整理版删除了历史版本发布 MD 和重复临时说明，不对源码 API、依赖或 import 路径做破坏性改动。模型素材约 72 MB，若你已有 Git LFS 可考虑使用；`reports/` 的 JSON 是可复核的历史样本而非新 GPU 成绩。

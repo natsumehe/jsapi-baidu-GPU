@@ -19,6 +19,7 @@ export interface DataPipelineStats {
     loadedTiles: number;
     decodedTiles: number;
     bytesFetched: number;
+    streamChunks: number;
 }
 
 /**
@@ -41,6 +42,7 @@ export class DataPipeline {
     private loadedTiles = 0;
     private decodedTiles = 0;
     private bytesFetched = 0;
+    private streamChunks = 0;
 
     constructor(
         private readonly workers: WorkerPool,
@@ -57,7 +59,8 @@ export class DataPipeline {
 
     requestTile(
         request: TileRequest,
-        signal?: AbortSignal
+        signal?: AbortSignal,
+        onPartial?: (tile: PipelineTile) => void
     ): Promise<PipelineTile> {
         return this.scheduler.schedule({
             id: request.id,
@@ -70,18 +73,24 @@ export class DataPipeline {
                     );
                 }
 
-                const raw = await this.source.load(
-                    request,
-                    signal
-                );
+                let decoded: DecodedTile;
 
-                this.bytesFetched += raw.byteLength;
-
-                const decoded: DecodedTile =
-                    await this.workers.decodeTile(
-                        request.id,
-                        raw
-                    );
+                if (this.source.loadStream) {
+                    const stream = await this.source.loadStream(request, signal);
+                    const countedStream = this.countStream(stream);
+                    decoded = await this.workers.decodeTileStream(request.id, countedStream, signal, chunk => {
+                        if (signal?.aborted || !onPartial) return;
+                        const partial = this.format.packForGPU(this.format.normalizeDecodedTile({
+                            id: request.id, count: chunk.count, positions: chunk.positions, colors: chunk.colors
+                        }, request.z));
+                        onPartial({ ...partial, request });
+                    });
+                } else {
+                    const raw = await this.source.load(request, signal);
+                    this.bytesFetched += raw.byteLength;
+                    this.streamChunks += 1;
+                    decoded = await this.workers.decodeTile(request.id, raw);
+                }
 
                 this.decodedTiles++;
 
@@ -114,8 +123,18 @@ export class DataPipeline {
                 this.loadedTiles,
             decodedTiles:
                 this.decodedTiles,
-            bytesFetched:
-                this.bytesFetched
+            bytesFetched: this.bytesFetched,
+            streamChunks: this.streamChunks
         };
+    }
+
+    private async *countStream(
+        stream: AsyncIterable<Uint8Array>
+    ): AsyncGenerator<Uint8Array> {
+        for await (const chunk of stream) {
+            this.bytesFetched += chunk.byteLength;
+            this.streamChunks += 1;
+            yield chunk;
+        }
     }
 }

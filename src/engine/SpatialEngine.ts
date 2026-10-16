@@ -27,14 +27,17 @@ export interface SpatialEngineStats {
     workerTasks: number;
     points: number;
     bytesFetched: number;
+    streamChunks: number;
     level: number;
     agv: AGVRuntimeState | null;
     agvFleet: {
         total: number;
+        active: number;
+        waiting: number;
         moving: number;
         parking: number;
         charging: number;
-        returnQuay: number;
+        returnBuffer: number;
         yardStack: number;
         avgBattery: number;
         loaded: boolean;
@@ -199,6 +202,10 @@ export class SpatialEngine {
         return this.baiduLayer.getBenchmarkGpuTimeMs();
     }
 
+    getBenchmarkStats() {
+        return this.baiduLayer.getBenchmarkStats();
+    }
+
     redraw(): void {
         this.baiduLayer.redraw();
     }
@@ -240,6 +247,8 @@ export class SpatialEngine {
                 this.getPointCount(),
             bytesFetched:
                 this.bytesFetched,
+            streamChunks:
+                pipelineStats.streamChunks,
             level:
                 this.currentLevel,
             agv:

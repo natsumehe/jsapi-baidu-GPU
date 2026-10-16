@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>洋山港四期 · AGV 运行态势</title>
+    <title>洋山港四期 · 海量空间数据流式渲染</title>
     <style>
         :root {
             --panel: rgba(5, 18, 33, 0.90);
@@ -53,6 +53,8 @@
         }
         .render-status.error { color:#ff9c9c; border-color:rgba(255,90,90,.5); }
 
+        #top-left { pointer-events:auto; cursor:pointer; }
+        #top-left:hover .summary {border-color:#60c3ff;}
         #top-left { top: 1.5vh; left: 1.2vw; width: min(30vw, 460px); }
         #title { font-size: 24px; font-weight: 900; letter-spacing: .4px; text-shadow: 0 2px 9px rgba(0,0,0,.65); }
         #subtitle { margin-top: 2px; color: #a8c0d8; font-size: 12px; letter-spacing: .2px; }
@@ -73,19 +75,22 @@
         .summary .name { margin-top: 5px; color: #9db6ce; font-size: 10px; }
         .summary .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
 
+        .top-left-hint{margin-top:8px;color:#8bd8f4;font-size:11px;background:#06243baf;display:inline-block;padding:6px 9px;border-radius:6px;}
+        .entity-browser{position:fixed;left:1.2vw;top:140px;width:min(520px,95vw);max-height:calc(100vh - 170px);z-index:2147483646;background:#071e33f2;color:#e9f6ff;border:1px solid #4b9cba;border-radius:12px;padding:13px;overflow:auto;box-shadow:0 16px 40px #0008;font:12px/1.5 system-ui,"Microsoft YaHei",sans-serif}
+        .entity-browser[hidden]{display:none}.browser-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.browser-head strong{font-size:15px}.browser-head button,.browser-tabs button{background:#173e59;border:1px solid #39708a;border-radius:6px;color:#fff;padding:6px 9px;cursor:pointer}
+        .browser-tabs{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:9px}.browser-tabs button.active{background:#1579a3}.browser-search{width:100%;box-sizing:border-box;background:#102c46;border:1px solid #4a7490;color:white;padding:8px;border-radius:7px}
+        .browser-list{margin-top:8px;max-height:48vh;overflow:auto;display:grid;gap:4px}.browser-item{display:flex;justify-content:space-between;gap:10px;text-align:left;background:#0d2e49;border:1px solid #234e69;border-radius:5px;color:#eef9ff;padding:8px;cursor:pointer}.browser-item:hover{background:#215b7b}.browser-item small{color:#9bd9ed}
         #top-right { width:100%; }
-        #agv-trajectory-toggle { left: 1.2vw; bottom: 2vh; padding: 8px 12px; pointer-events:auto; cursor:pointer; color:#eaf5ff; background:var(--panel); }
-        #agv-trajectory-panel { left: 1.2vw; bottom: 2vh; width:min(32vw,460px); display:none; pointer-events:auto; }
-        #agv-trajectory-panel.open { display:block; }
-        .trajectory-inner { padding:12px 14px; }
-        .trajectory-head { display:flex; align-items:center; justify-content:space-between; }
-        .trajectory-head button { border:0; background:transparent; color:#dbeeff; font-size:20px; cursor:pointer; }
-        .lifecycle-flow { display:flex; align-items:center; justify-content:space-between; margin-top:10px; color:#b8cee2; font-size:10px; }
-        .lifecycle-flow b { color:#67b9f2; }
-        .trajectory-selected { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:10px; padding-top:10px; border-top:1px solid rgba(100,160,200,.14); }
-        .trajectory-selected div { padding:6px; border:1px solid rgba(100,160,200,.12); border-radius:6px; background:rgba(18,44,69,.55); }
-        .trajectory-selected span { display:block; color:#91a9c3; font-size:8px; }
-        .trajectory-selected strong { display:block; color:#eaf5ff; font-size:10px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .entity-inspection { position:fixed;right:20px;top:86px;z-index:2147483646;width:min(365px,calc(100vw - 30px));max-height:75vh;overflow:auto;background:rgba(6,22,39,.96);color:#eaf7ff;border:1px solid #5cabc6;border-radius:12px;padding:14px;box-shadow:0 18px 40px #0008;font:12px/1.5 system-ui,"Microsoft YaHei",sans-serif; }
+        .entity-inspection[hidden]{display:none}
+        .entity-inspection-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+        .entity-inspection-head strong{display:block;font-size:15px}.entity-inspection-head small{display:block;color:#a2c6d9;margin-top:4px}
+        .entity-inspection-head button{border:0;background:transparent;color:white;font-size:23px;cursor:pointer}
+        .entity-inspection-note{color:#a9c6d6;font-size:11px;line-height:1.5;background:#17405b;padding:8px;border-radius:6px}
+        .entity-inspection-rows{display:grid;grid-template-columns:1fr 1fr;gap:7px 12px;margin:0}
+        .entity-inspection-rows dt{color:#92bbd3;overflow-wrap:anywhere}.entity-inspection-rows dd{margin:0;text-align:right;overflow-wrap:anywhere}
+        .entity-inspection-rows em{font-size:10px;color:#84e6c2;font-style:normal}
+        .agv-history{border-top:1px solid #42687b;margin-top:12px;padding-top:10px}.agv-history-head{display:flex;align-items:center;justify-content:space-between;gap:5px}.agv-history-head button{background:#185c7f;color:#fff;border:1px solid #4d9bbe;border-radius:5px;padding:5px;cursor:pointer}.agv-history p{color:#a8d1e8;font-size:10px}.agv-history-table{width:100%;border-collapse:collapse;font-size:10px}.agv-history-table th,.agv-history-table td{padding:4px;border-bottom:1px solid #28516a;text-align:left}.agv-history-table th{position:sticky;top:0;background:#08223a}
         .panel-box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 38px rgba(0,0,0,.26); backdrop-filter: blur(8px); }
         .legend-box { padding: 12px 13px 11px; }
         .legend-title { font-weight: 800; font-size: 13px; margin-bottom: 8px; }
@@ -96,10 +101,29 @@
         .side-key div { font-size:10px; color:#c7d7e8; }
         .icon-key { display:inline-flex; width:18px; height:18px; align-items:center; justify-content:center; margin-right:5px; border-radius:4px; background:rgba(37,83,124,.52); color:#fff; }
 
-        #compass { top: 41vh; right: 18px; width: 50px; height: 50px; border-radius:50%; background:rgba(10,23,38,.74); border:1px solid rgba(205,225,240,.25); display:flex; flex-direction:column; align-items:center; justify-content:center; }
-        #compass .n { font-size: 10px; font-weight:900; }
-        #compass .arrow { font-size: 20px; line-height: 16px; }
 
+        #cargo-operations { position:absolute; top:115px; right:18px; z-index:2147483646;
+          width:min(350px,35vw); max-height:calc(100vh - 155px); overflow:auto;
+          padding:13px; background:rgba(5,18,33,.94); border:1px solid rgba(111,185,245,.48);
+          border-radius:12px; color:#eaf5ff; font-size:11px; box-shadow:0 12px 38px rgba(0,0,0,.3); }
+        .cargo-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+        .cargo-head strong {font-size:14px;} .cargo-head span {font:700 9px monospace; color:#ffcc71;}
+        .cargo-statline {color:#8fc5e8; margin-top:9px; line-height:1.5;}
+        .cargo-controls {display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:9px;}
+        .cargo-controls label {color:#9cb7d1;} .cargo-controls select,.cargo-controls button {
+          color:#ecf6ff; background:#18314b; border:1px solid #345474; padding:5px; border-radius:5px; font-size:10px; max-width:150px; }
+        .cargo-controls button {cursor:pointer;} .cargo-controls :disabled {opacity:.4;}
+        .cargo-selected {margin:11px 0; padding:9px; border:1px solid #345474; border-radius:7px; background:rgba(18,44,69,.7);}
+        .cargo-selected strong {font-size:12px;} .cargo-selected div {font-size:9px; color:#a6c0da; margin-top:5px;}
+        .cargo-steps {display:grid;grid-template-columns:1fr 1fr;gap:5px;}
+        .cargo-step {color:#829bb5;background:rgba(23,42,63,.65);border:1px solid rgba(110,175,220,.14);border-radius:4px;padding:6px;}
+        .cargo-step.done {color:#a9eece;border-color:rgba(52,210,142,.25);}
+        .cargo-step.current {background:rgba(46,114,90,.45);font-weight:800;}
+        .cargo-subtitle {margin-top:12px;font-weight:800;}
+        .cargo-events div {border-bottom:1px solid rgba(110,175,220,.12);padding:6px 0;color:#bccee0;font:9px/1.5 monospace;}
+        .cargo-error {color:#ffb0b0;margin-top:7px;line-height:1.4;}
+        .cargo-note {color:#899fb7;line-height:1.5;font-size:9px;margin-top:10px;}
+        @media (max-width:900px) {#cargo-operations {right:8px; width:42vw;top:115px;}}
         #tasks-panel { display:none; }
         .tasks-inner { padding: 13px 14px 11px; }
         .panel-title { font-size: 15px; font-weight: 900; margin-bottom: 9px; }
@@ -129,105 +153,35 @@
 
 
 
-        #data-dashboard { right: 1.2vw; top: 1.5vh; width: min(42vw, 680px); max-height: 37vh; overflow: hidden; pointer-events: auto; }
-        .data-dashboard-inner { padding: 11px 12px; }
-        .data-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-        .data-head .panel-title { margin:0; }
-        .data-counts { display:grid; grid-template-columns:repeat(5,1fr); gap:5px; margin-top:8px; }
-        .data-count { padding:6px; border:1px solid rgba(100,160,200,.14); border-radius:6px; background:rgba(18,44,69,.55); min-width:0; }
-        .data-count .n { display:block; font-size:15px; font-weight:900; color:#eaf5ff; }
-        .data-count .k { display:block; margin-top:2px; color:#91a9c3; font-size:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .data-tabs { display:flex; gap:5px; margin-top:8px; }
-        .data-tab { border:1px solid rgba(150,190,230,.3); border-radius:5px; background:rgba(20,47,73,.96); color:#dceeff; padding:5px 8px; font:inherit; font-size:9px; cursor:pointer; }
-        .data-tab.active { background:rgba(52,104,154,.95); border-color:rgba(120,200,255,.55); }
-        .data-table-wrap { margin-top:7px; max-height:20vh; overflow:auto; border:1px solid rgba(100,160,200,.14); border-radius:7px; }
-        .data-table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:8px; }
-        .data-table th { position:sticky; top:0; z-index:1; background:#102b45; color:#8ea8c2; padding:5px 4px; text-align:left; }
-        .data-table td { padding:4px; border-top:1px solid rgba(100,160,200,.10); color:#d5e3ef; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .data-table tr.selected { background:rgba(54,125,185,.28); }
-        .data-table tr:hover { background:rgba(54,125,185,.20); cursor:pointer; }
         #disclaimer { left: 1.2vw; top: 14vh; z-index:2147483646; padding:6px 8px; color:#9eb5d0; font-size:clamp(8px,.55vw,10px); border-radius:6px; background:rgba(5,18,33,.55); pointer-events:none; }
 
-        @media (max-width: 1200px) {
-            #agv-trajectory-panel { width:min(40vw,520px); }
-        }
         @media (max-width: 900px) {
             #top-left { width: 44vw; }
-            #agv-trajectory-panel { width:46vw; left:1.2vw; }
-            #data-dashboard { right:1.2vw; width:52vw; }
            
         }
     </style>
-    <script src="https://api.map.baidu.com/api?v=4.0&ak=h0tGfkZGX5UPInFtZdPGl2hn5yQX70SP"></script>
+    <script src="/config.js"></script>
 </head>
 <body>
 <div id="map_container"></div>
-<div id="top-left" class="hud">
-    <div id="title">洋山港四期 · AGV 运行态势</div>
-    <div id="subtitle">Yangshan Port Phase IV · AGV Operation Status · 155 AGVs · <span id="uiHeartbeat">BOOT</span></div>
-    <div class="summary">
+
+<div id="top-left" class="hud" role="button" tabindex="0" aria-label="展开设备和集装箱详细列表">
+    <div id="title">洋山港四期 · 海量空间数据流式渲染</div>
+    <div id="subtitle">Yangshan Port Phase IV · Baidu JSAPI WebGL · 155 AGVs · <span id="uiHeartbeat">BOOT</span></div>
+    <div class="summary" title="点击打开设备与集装箱列表">
         <div class="item"><div><span class="value" id="agvTotal">155</span> <span style="color:#9db6ce;font-size:9px">辆</span></div><div class="name">AGV 总数</div></div>
-        <div class="item"><div><span class="dot" style="background:var(--green)"></span><span class="value" id="agvMoving">132</span></div><div class="name">运行中</div></div>
-        <div class="item"><div><span class="dot" style="background:var(--blue)"></span><span class="value" id="agvCharging">12</span></div><div class="name">充电中</div></div>
-        <div class="item"><div><span class="dot" style="background:#9aa9bb"></span><span class="value" id="agvParking">8</span></div><div class="name">待机</div></div>
-        <div class="item"><div><span class="dot" style="background:#ff3f42"></span><span class="value" id="agvFault">3</span></div><div class="name">故障</div></div>
+        <div class="item"><div><span class="dot" style="background:var(--green)"></span><span class="value" id="agvMoving">0</span></div><div class="name">运行中</div></div>
+        <div class="item"><div><span class="dot" style="background:var(--blue)"></span><span class="value" id="agvCharging">0</span></div><div class="name">充电中</div></div>
+        <div class="item"><div><span class="dot" style="background:#9aa9bb"></span><span class="value" id="agvParking">155</span></div><div class="name">待机</div></div>
+        <div class="item"><div><span class="dot" style="background:#ff3f42"></span><span class="value" id="agvAssigned">0</span></div><div class="name">执行任务</div></div>
     </div>
+    <div class="top-left-hint">点击此处查看 AGV / 岸桥 / Gantry / 集装箱的当前信息 ▸</div>
 </div>
 
-<button id="agv-trajectory-toggle" class="hud panel-box">⌁ AGV 运行轨迹</button>
-
-<div id="agv-trajectory-panel" class="hud panel-box" aria-hidden="true">
-    <div class="trajectory-inner">
-        <div class="trajectory-head"><div class="panel-title">AGV 全周期运行轨迹</div><button id="agv-trajectory-close">×</button></div>
-        <div class="legend-grid">
-            <div class="legend-row"><span class="line-dot" style="background:var(--green)"></span>岸桥作业 / 运输</div>
-            <div class="legend-row"><span class="line-dot" style="background:var(--orange)"></span>码垛运输</div>
-            <div class="legend-row"><span class="line-dot" style="background:var(--blue)"></span>停车</div>
-            <div class="legend-row"><span class="line-dot" style="background:var(--cyan)"></span>充电</div>
-            <div class="legend-row"><span class="line-dot" style="background:var(--purple)"></span>返回作业区</div>
-        </div>
-        <div class="lifecycle-flow"><span>岸桥</span><b>→</b><span>码垛</span><b>→</b><span>停车</span><b>→</b><span>充电</span><b>→</b><span>返回</span></div>
-        <div class="trajectory-selected">
-            <div><span>Selected AGV</span><strong id="agv">AGV-001</strong></div>
-            <div><span>TOS Task</span><strong id="agvTask">N/A</strong></div>
-            <div><span>Container</span><strong id="agvContainer">N/A</strong></div>
-            <div><span>位置</span><strong id="agvPosition">—</strong></div>
-            <div><span>速度</span><strong id="agvSpeed">—</strong></div>
-            <div><span>当前阶段</span><strong id="agvPhase">—</strong></div>
-            <div><span>货物状态</span><strong id="agvCargo">—</strong></div>
-            <div><span>任务状态</span><strong id="agvTaskStatus">—</strong></div>
-            <div><span>集装箱转运</span><strong id="agvCargoTransfer">—</strong></div>
-            <div><span>全周期进度</span><strong id="agvCycleProgress">—</strong></div>
-            <div><span>周期进度</span><strong id="agvProgress">—</strong></div>
-            <div><span>岸桥</span><strong id="agvCrane">—</strong></div>
-            <div><span>电量</span><strong id="agvBattery">—</strong></div>
-        </div>
-    </div>
-</div>
+<section id="cargo-operations" aria-label="进口卸船业务状态"></section>
 
 
-<div id="data-dashboard" class="hud panel-box">
-    <div class="data-dashboard-inner">
-        <div class="data-head"><div class="panel-title">洋山港四期 · 完整运行数据</div><span id="dataRefreshTime" style="font-size:8px;color:#7f9ab4">—</span></div>
-        <div class="data-counts">
-            <div class="data-count"><span class="n" id="gisRoadCount">0</span><span class="k">Line 道路</span></div>
-            <div class="data-count"><span class="n" id="gisPolygonCount">0</span><span class="k">Polygon</span></div>
-            <div class="data-count"><span class="n" id="gisYardCount">0</span><span class="k">集装箱区域</span></div>
-            <div class="data-count"><span class="n" id="gisCraneCount">0</span><span class="k">岸桥点</span></div>
-            <div class="data-count"><span class="n" id="tosCount">0</span><span class="k">TOS 任务</span></div>
-        </div>
-        <div class="data-tabs">
-            <button class="data-tab active" data-table="agv">155 AGV 实时状态</button>
-            <button class="data-tab" data-table="tos">TOS_STA_AGV_CNTR_INFOS</button>
-        </div>
-        <div class="data-table-wrap">
-            <table class="data-table"><thead id="fleetTableHead"></thead><tbody id="fleetTableBody"></tbody></table>
-        </div>
-    </div>
-</div>
-
-<div id="compass" class="hud"><div class="n">N</div><div class="arrow">↑</div></div>
-ß
+<a href="/lab.html" id="lab-entry" style="position:fixed;z-index:2147483646;right:20px;bottom:22px;padding:12px 16px;border-radius:9px;text-decoration:none;font-weight:700;color:#eafaff;background:#126996;border:1px solid #4dc5f1;box-shadow:0 8px 22px #0006;">⚙ 空间引擎实验室 · A/B 测试 →</a>
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

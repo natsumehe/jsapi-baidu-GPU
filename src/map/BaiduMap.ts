@@ -93,9 +93,25 @@ export class BaiduMap {
         this.map.enableDragging();
 
         // 与用户提供的洋山四期卫星影像保持一致：有可用卫星底图时默认进入卫星模式。
-        const satellite = (BMap as any).BMAP_SATELLITE_MAP;
-        if (satellite && typeof (this.map as any).setMapType === "function") {
-            (this.map as any).setMapType(satellite);
+        // 注意：在地图构造后同步调用 setMapType 会命中 Baidu GL 内部尚未初始化的
+        // label overlay（_changeFlatMapType → clearLabelOverlayData 读取 undefined），
+        // 导致整个应用初始化被抛错中断。因此推迟到首次瓦片加载完成后再切换，并做容错。
+        const applySatellite = () => {
+            if (typeof (this.map as any).removeEventListener === "function") {
+                (this.map as any).removeEventListener("tilesloaded", applySatellite);
+            }
+            const satellite = (BMap as any).BMAP_SATELLITE_MAP;
+            if (!satellite || typeof (this.map as any).setMapType !== "function") return;
+            try {
+                (this.map as any).setMapType(satellite);
+            } catch (error) {
+                console.warn("[BaiduMap] 切换卫星底图失败，保持默认底图。", error);
+            }
+        };
+        if (typeof (this.map as any).addEventListener === "function") {
+            (this.map as any).addEventListener("tilesloaded", applySatellite);
+        } else {
+            applySatellite();
         }
 
         this.map.setTilt(
@@ -345,7 +361,7 @@ export class BaiduMap {
 
     onCameraChanged(
         callback: () => void
-    ): void {
+    ): () => void {
 
         this.map.addEventListener(
             "moveend",
@@ -361,5 +377,10 @@ export class BaiduMap {
             "dragend",
             callback
         );
+        return () => {
+            this.map.removeEventListener?.("moveend", callback);
+            this.map.removeEventListener?.("zoomend", callback);
+            this.map.removeEventListener?.("dragend", callback);
+        };
     }
 }

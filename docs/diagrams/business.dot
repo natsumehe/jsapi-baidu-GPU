@@ -1,0 +1,7 @@
+digraph G {
+ graph [rankdir=LR, bgcolor="transparent", nodesep=.25, ranksep=.52, pad=.2, fontname="Noto Sans CJK SC", splines=polyline];
+ node [shape=box,style="rounded,filled",fontname="Noto Sans CJK SC",fillcolor="#eaf3fa",color="#b1d1e8",fontsize=12,margin=".16,.12"];
+ edge [color="#427a9f",arrowsize=.65];
+ Buffer [label="缓冲区\n待命 / 派工"]; QC [label="岸桥 QC\n接箱 / 装车"]; AGV [label="AGV\n独立路线 / 载箱"]; Gantry [label="Gantry / ASC\n车上接箱"]; Stack [label="堆场\n1–5 层存放"];
+ Buffer -> QC -> AGV -> Gantry -> Stack; Gantry -> QC [label="空车返程",color="#eba847",fontcolor="#9a6a2f"]; QC -> Buffer [label="无任务归位",color="#bc70be",fontcolor="#8a478c"];
+}

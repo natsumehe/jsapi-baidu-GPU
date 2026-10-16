@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>洋山港 · WebGPU × Baidu JSAPI 空间数据实验室</title>
+<link rel="stylesheet" href="./lab/styles.css">
+<script src="./public/config.js"></script>
+</head>
+<body>
+<header><div class="brand"><span class="brand-mark">◈</span><div><h1>洋山港四期 · 空间计算实验室</h1><p>WebGPU Compute × Baidu JSAPI / WebGL · 可复现 A/B 测试</p></div></div><nav><a href="/">港口场景</a><a class="active" href="/lab.html">技术实验室</a><a href="./architecture.html" target="_blank">架构文档 ↗</a></nav></header>
+<main>
+<aside class="sidebar">
+ <section class="panel"><h2>实验参数 <small>WORKLOAD</small></h2>
+  <label>空间对象规模<select id="size"><option value="10000">10,000 · 快速验证</option><option selected value="100000">100,000 · 标准</option><option value="500000">500,000 · 压力</option><option value="1000000">1,000,000 · 极限</option></select></label>
+  <label>几何类型<select id="geometry"><option selected value="mixed">混合 · 点、线、面（各约 1/3）</option><option value="point">Point · 纯点</option><option value="line">LineString · 纯线</option><option value="polygon">Polygon · 纯面</option></select></label>
+  <label>抽象空间分布<select id="profile"><option value="uniform" selected>均匀随机</option><option value="clustered">空间聚簇</option><option value="corridor">带状分布</option></select></label>
+  <label>数据随机种子<input type="number" id="seed" value="20261016" min="1" max="4294967295"></label>
+  <label>分块大小<select id="chunk"><option value="2048">2,048</option><option selected value="8192">8,192</option><option value="16384">16,384</option><option value="32768">32,768</option></select></label>
+  <label>算法模式<select id="mode"><option value="A">A · 主线程批量 + WebGL</option><option value="B" selected>B · Worker 流式 + WebGL</option><option value="E">E · Worker + CPU 裁剪（GPU 对照）</option><option value="C">C · Worker + WebGPU 裁剪</option><option value="D">D · WebGPU + 自适应背压</option></select></label>
+  <div class="action-grid"><button id="run" class="primary">运行单组实验</button><button id="ab">顺序运行 A/B/E/C/D</button></div>
+  <button id="stop" class="subtle" disabled>取消当前任务</button>
+  <div class="progress"><div id="progress-bar"></div></div><p id="progress-text" class="hint">等待实验...</p>
+ </section>
+ <section class="panel" id="http-stream-panel"><h2>真实 HTTP 流式加载 <small>FETCH STREAM</small></h2>
+  <p class="hint">通过网络获取 YSL1 二进制流，按任意网络分片解析对象，逐批上传 WebGL。与上方 Worker 生成实验独立。</p>
+  <label>分块绘制间隔（演示用）<select id="stream-delay"><option value="0">0 ms · 最大吞吐</option><option value="15">15 ms · 快速渐进</option><option value="50" selected>50 ms · 可观察</option><option value="120">120 ms · 慢速展示</option></select></label>
+  <div class="action-grid"><button id="http-stream-run" class="primary">HTTP 分块加载</button><button id="http-stream-stop" disabled>取消加载</button></div>
+  <div class="progress"><div id="http-stream-bar"></div></div>
+  <p class="hint" id="http-stream-status">等待开始：分片读取 → 记录解码 → bufferSubData → 绘制</p>
+  <div class="fact"><span>网络已收到</span><strong id="http-stream-bytes">—</strong></div>
+  <div class="fact"><span>Read / GPU 上传批次</span><strong id="http-stream-batches">—</strong></div>
+  <div class="fact"><span>首批可见 / 总耗时</span><strong id="http-stream-timing">—</strong></div>
+  <div class="fact"><span>点 / 线 / 面实时数量</span><strong id="http-stream-geoms">—</strong></div>
+  <p class="hint">数据文件固定为 100 万混合对象；选择较小规模会提前取消读取。展示延迟人为控制画面节奏，不作为网络吞吐或 GPU 加速收益。</p>
+ </section>
+ <section class="panel"><h2>运行环境 <small>RUNTIME</small></h2>
+  <div class="fact"><span>地图适配器</span><strong id="map-mode">OFFLINE GRID</strong></div>
+  <div class="fact"><span>WebGL</span><strong id="gl-mode">检测中</strong></div>
+  <div class="fact"><span>WebGPU Compute</span><strong id="gpu-mode">检测中</strong></div>
+  <p class="hint">离线网格无需 AK。真实百度底图需要可用 AK、域名白名单和网络；它不是 WebGPU 的替代物。</p>
+  <button id="baidu">尝试加载百度地图</button>
+ </section>
+ <section class="panel"><h2>实验规则 <small>FAIRNESS</small></h2>
+ <p class="hint">A/B/E/C/D 使用相同 seed、相同空间对象与相同 WebGL 几何绘制器（POINTS / LINES / TRIANGLES）。A 主线程生成并批量显示；B Worker 分块显示；E 是 CPU 裁剪对照；C/D 增加 WebGPU 可见性裁剪及回读。不会用 CPU 模拟 WebGPU 并冒充成功。</p>
+ <p class="hint">首批可见时间为首次提交并等待 RAF 的近似值，不等于光栅化完成的 GPU 时间。WebGPU 用时包括传输、计算、回读与压缩单独记录。</p>
+ </section>
+</aside>
+<div class="workspace">
+ <section class="visual"><div id="scene"><div id="basemap"></div><canvas id="overlay"></canvas><div class="map-label"><span class="live"></span><span id="scene-label">离线实验坐标系 · 抽象点、线、面</span></div><div class="legend"><span>● Point</span><span>━ LineString</span><span>▰ Polygon</span></div></div></section>
+ <section class="stats"><div class="stat"><span>已绘制对象</span><strong id="drawn">—</strong><small id="shape-breakdown">点 — / 线 — / 面 —</small></div><div class="stat"><span>首批可见</span><strong id="first">—</strong><small>ms</small></div><div class="stat"><span>加载耗时</span><strong id="load">—</strong><small>ms</small></div><div class="stat"><span>交互 P95</span><strong id="p95">—</strong><small>ms</small></div><div class="stat"><span>WebGPU 端到端</span><strong id="compute">—</strong><small>ms</small></div></section>
+ <section class="panel results"><div class="results-head"><div><h2>A/B 性能结果 <small>MEASURED IN THIS BROWSER</small></h2><p class="hint">结果均在浏览器本机执行。几何类型、分布、随机种子、地图模式和设备环境须保持一致。Point 1 顶点；LineString 2 顶点；Polygon 6 顶点（2 个三角形）。</p></div><div class="export"><button id="export-json">导出 JSON</button><button id="export-csv">导出 CSV</button></div></div>
+ <div class="table-wrap"><table><thead><tr><th>方案</th><th>几何</th><th>对象数</th><th>首批可见</th><th>加载时间</th><th>加载帧 P95</th><th>交互帧 P95</th><th>吞吐 obj/s</th><th>WebGPU 全链路</th><th>显存上传 MB</th></tr></thead><tbody id="results-body"><tr><td colspan="10" class="empty">尚未测试。点击“顺序运行 A/B/E/C/D”开始记录真实测量结果。</td></tr></tbody></table></div>
+ <p id="errors" class="hint"></p></section>
+</div></main>
+<footer>抽象点、线、面研究性实验 · 数据为确定性合成空间数据，非实际 TOS 记录。WebGPU 与 WebGL 之间不共享缓冲区，跨 API 回读计入测量。</footer>
+<script type="module" src="./lab/main.mjs"></script>
+</body></html>

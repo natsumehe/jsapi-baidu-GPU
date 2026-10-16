@@ -127,7 +127,7 @@ uniform vec2 u_eastBasis;
 uniform vec2 u_northBasis;
 uniform vec2 u_viewport;
 uniform float u_heading;
-uniform float u_modelScale;
+uniform vec3 u_modelScale;
 uniform float u_depthScale;
 
 varying vec3 v_normal;
@@ -150,6 +150,10 @@ void main() {
         u_agvPixel +
         u_eastBasis * east +
         u_northBasis * north;
+    // Tilt-free top-down maps otherwise flatten the Y-up crane to a footprint.
+    // This modest visual height extrusion gives vertical beams a readable profile;
+    // it is explicitly an overlay effect, not a surveyed 3D map depth buffer.
+    screenPx.y -= p.y * length(u_eastBasis) * u_depthScale;
 
     float clipX =
         screenPx.x / u_viewport.x * 2.0 - 1.0;
@@ -276,6 +280,7 @@ export class GLBAGVLayer {
     private readonly viewportLocation: WebGLUniformLocation;
     private readonly headingLocation: WebGLUniformLocation;
     private readonly modelScaleLocation: WebGLUniformLocation;
+    private readonly depthScaleLocation: WebGLUniformLocation;
 
     private readonly baseColorFactorLocation: WebGLUniformLocation;
     private readonly baseColorTextureLocation: WebGLUniformLocation;
@@ -297,7 +302,21 @@ export class GLBAGVLayer {
     private abortController: AbortController | null = null;
 
     /** 当前 GLB 已经经过节点层级变换；这里只处理米制比例。 */
-    private readonly modelScale = 0.01;
+    private modelScale = 0.01;
+    private modelAxisScales: [number,number,number] | null = null;
+
+    /** Per-asset metre calibration. The source GLB can use arbitrary units. */
+    setModelScale(scale: number): void {
+        if (Number.isFinite(scale) && scale > 0) {this.modelScale = scale; this.modelAxisScales = null;}
+    }
+
+    /** Model GLB's source units are not necessarily metres: normalize each axis.
+     * Original AGV GLB is 1667.69 x 250.21 x 373.04 source units, so
+     * (7.2/1667.69, 2.2/250.21, 3.0/373.04) yields a 7.2m x 3.0m body.
+     */
+    setModelAxisScales(x:number,y:number,z:number):void {
+        if([x,y,z].every(v=>Number.isFinite(v)&&v>0))this.modelAxisScales=[x,y,z];
+    }
 
     private state: AGVState = {
         id: "AGV-001",
@@ -334,6 +353,7 @@ export class GLBAGVLayer {
         this.viewportLocation = this.requireUniform("u_viewport");
         this.headingLocation = this.requireUniform("u_heading");
         this.modelScaleLocation = this.requireUniform("u_modelScale");
+        this.depthScaleLocation = this.requireUniform("u_depthScale");
 
         this.baseColorFactorLocation = this.requireUniform("u_baseColorFactor");
         this.baseColorTextureLocation = this.requireUniform("u_baseColorTexture");
@@ -452,7 +472,9 @@ export class GLBAGVLayer {
         gl.uniform2f(this.northBasisLocation, projection.northBasisX, projection.northBasisY);
         gl.uniform2f(this.viewportLocation, projection.viewportWidth, projection.viewportHeight);
         gl.uniform1f(this.headingLocation, this.state.heading);
-        gl.uniform1f(this.modelScaleLocation, this.modelScale);
+        const axes=this.modelAxisScales??[this.modelScale,this.modelScale,this.modelScale];
+        gl.uniform3f(this.modelScaleLocation, axes[0], axes[1], axes[2]);
+        gl.uniform1f(this.depthScaleLocation, 0.55);
 
         gl.disable(gl.CULL_FACE);
         // Overlay 模式不与百度地图共享深度；模型本身不需要伪造地理 depth。

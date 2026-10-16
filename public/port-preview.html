@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>洋山港四期 · 岸桥—AGV—轨道吊直接接箱—五层堆场</title>
+<style>
+:root{font-family:Inter,"PingFang SC","Microsoft Yahei",sans-serif;color:#dceefc;background:#071626}
+*{box-sizing:border-box}body{margin:0;min-height:100vh}header{position:absolute;z-index:10;left:16px;top:15px;right:16px;display:flex;align-items:center;gap:15px;pointer-events:none}
+header>div,.controls,.legend,.metrics,.footer{background:rgba(8,22,36,.94);border:1px solid #2f536d;border-radius:12px;box-shadow:0 12px 28px #0007;backdrop-filter:blur(7px);padding:12px 16px;pointer-events:auto}
+h1{margin:0;font-size:18px}header p{margin:5px 0 0;color:#85afc8;font-size:12px}
+main{height:100vh;width:100%;position:relative;overflow:hidden;background:radial-gradient(circle at 45% 40%,#174156 0%,#081d30 75%)}
+canvas{position:absolute;left:0;top:0;width:100%;height:100%}#glCanvas{pointer-events:none}#previewFleetBrowser[hidden]{display:none}#previewFleetBrowser{position:absolute;left:16px;top:105px;z-index:15;width:340px;max-width:90vw;max-height:65vh;overflow:auto;padding:12px;border:1px solid #57a8ca;background:#07233df2;border-radius:10px;color:#e8f7ff;box-shadow:0 16px 32px #0008}#previewFleetBrowser input{width:100%;background:#12384f;color:#fff;padding:8px;border:1px solid #356987;border-radius:5px}#previewFleetRows{display:grid;gap:5px;max-height:42vh;overflow:auto;margin-top:8px}#previewFleetRows button{display:flex;justify-content:space-between;gap:8px;padding:7px;background:#13405b;color:#fff;border:1px solid #315b74;border-radius:6px;cursor:pointer}#previewFleetBrowser[hidden]{display:none}#pickInfo[hidden]{display:none}#pickInfo{position:absolute;right:18px;top:410px;z-index:13;max-height:42vh;overflow:auto;max-width:300px;min-width:230px;background:#09233bee;border:1px solid #60b5ce;border-radius:10px;padding:14px;box-shadow:0 16px 28px #0008}#pickInfo h3{margin:0 0 8px;font-size:14px}#pickInfo small{color:#83b2c9}#pickFields{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px}#pickFields dt{color:#9abbd0}#pickFields dd{margin:0;text-align:right;overflow-wrap:anywhere}
+.controls{position:absolute;right:18px;top:100px;z-index:11;width:260px}
+.controls label{font-size:12px;color:#8facbf;display:block;margin:13px 0 7px}.controls input[type=range]{width:100%}.controls button{cursor:pointer;border:1px solid #387d9c;background:#173b56;color:#ecf9ff;border-radius:6px;padding:7px 11px;margin:3px 3px 4px 0}.controls button:hover{background:#246280}
+.metrics{position:absolute;bottom:18px;left:18px;z-index:10;max-width:620px;display:flex;gap:20px;flex-wrap:wrap;font-size:12px}.metrics b{display:block;color:#ffe6a1;font-size:18px}
+.legend{position:absolute;bottom:18px;right:18px;z-index:10;font-size:12px;max-width:290px;line-height:1.8;color:#c0d9eb}
+.footer{position:absolute;left:18px;top:96px;z-index:10;font-size:11px;color:#8fb8d3;max-width:300px}
+.legend strong{color:#e8f4ff}@media(max-width:780px){.controls{top:auto;bottom:95px;right:7px;width:185px;padding:8px}.footer{display:none}.legend{display:none}.metrics{max-width:100%;bottom:5px;left:5px;gap:6px;padding:8px}header{left:5px;right:5px}header>div{padding:8px}h1{font-size:13px}}
+</style>
+</head>
+<body>
+<main>
+<canvas id="world"></canvas><canvas id="glCanvas"></canvas>
+<header><div id="openPreviewFleet" style="cursor:pointer" role="button" tabindex="0" title="点击查看设备列表"><h1>洋山港四期 · 空间场景校验</h1><p>岸桥 QC → AGV 运输 → Gantry 直接接箱 → 最多五层标准箱堆场</p><p style="color:#62d4f2">点击左上角标题查看设备与集装箱列表 ▸</p></div></header>
+<aside id="previewFleetBrowser" hidden><strong>设备信息浏览器</strong> <button id="previewFleetClose" style="float:right;background:#174d68;color:white;border:0;cursor:pointer">关闭</button><div style="margin-top:9px;display:flex;gap:5px"><button data-kind="AGV">AGV</button><button data-kind="QC">岸桥</button><button data-kind="ASC">Gantry</button><button data-kind="CONTAINER">集装箱</button></div><input id="previewFleetSearch" placeholder="输入 AGV / 箱号 / 堆场编号"><div id="previewFleetRows"></div></aside><div class="footer">GIS：61 个堆场面 · 28 个岸桥点 · 971 个原始卸货点 · AGV 缓冲区面。<br>鼠标滚轮缩放、拖动平移。<br>此页无需百度 AK，用于检查模拟场景和 GLB 模型；真实底图请使用主工程。</div>
+<aside class="controls">
+<strong>场景控制</strong>
+<label>模拟时间：<span id="timeLabel">0.0</span> s</label><input id="time" type="range" min="0" max="1800" value="0" step="1">
+<div><button id="play">暂停</button><button id="reset">回到全港</button></div>
+<label>AGV 数量：<span id="vehicleLabel">155</span></label><input id="vehicleCount" type="range" min="1" max="155" value="155">
+<label>缩放：<span id="zoomLabel">100%</span></label><input id="zoom" type="range" min="1" max="20" step=".5" value="1">
+<div><label><input type="checkbox" id="models" checked> 显示真实 GLB 模型（近景）</label></div>
+<button id="autoWorkload">暂停自动派工</button><p style="color:#8bd6d4;font-size:11px">80% 为模拟任务目标，实际瞬时行驶数量受避让与交接约束；未标定路线不保证工业交通安全。</p><div id="modelStatus" style="font:11px/1.5 monospace;color:#86b8d4">模型加载中…</div>
+</aside>
+<aside id="pickInfo" hidden><h3 id="pickTitle">对象属性</h3><small>GIS + 模拟值；TSC/TAA/TAC 为附件字段字典</small><dl id="pickFields"></dl><section id="previewTrackHistory" hidden style="margin-top:12px;border-top:1px solid #497d96;padding-top:10px"></section><button onclick="document.getElementById('pickInfo').hidden=true" style="margin-top:6px;background:#16577a;border:0;padding:6px;color:#fff;cursor:pointer">关闭</button></aside>
+<div class="metrics"><div>QC 岸桥 <b id="qcCount">28</b></div><div>ASC/Gantry <b id="gantryCount">61</b></div><div>ISO 20ft 箱体 <b id="containerCount">32,327</b></div><div>实际行驶 AGV <b id="movingCount">—</b></div><div>缓冲待命 <b id="standbyCount">—</b></div><div>执行模拟任务 <b id="taskCount">124</b></div></div>
+
+<script type="module" src="/preview/port-preview.mjs"></script>
+</main>
+</body></html>

@@ -1,0 +1,15 @@
+digraph G {
+ graph [rankdir=TB, bgcolor="transparent", splines=ortho, nodesep=.28, ranksep=.52, pad=.3, fontname="Noto Sans CJK SC"];
+ node [shape=box, style="rounded,filled", color="#bed4e8", fillcolor="#edf5fb", fontname="Noto Sans CJK SC", fontcolor="#183856", fontsize=12, margin="0.21,0.12"];
+ edge [color="#608da9", arrowsize=.7, penwidth=1.3];
+ Scene [label="场景应用层\n港口可视化 / AGV 任务 / 对象信息"]; Lab [label="实验应用层\nA / B / E / C / D 对照与 HTTP Stream"];
+ Scene -> Engine; Lab -> Dataset; Lab -> GPU; Lab -> Render;
+ Engine [label="空间引擎层\nSpatialEngine / Tile / LOD / Scheduler / Cache",fillcolor="#cde9fd"];
+ Dataset [label="数据与流式处理层\n定序数据 / Fetch Stream / Worker / WASM",fillcolor="#cde9fd"];
+ Engine -> Dataset; Engine -> MAP; Engine -> Render; Engine -> GPU;
+ MAP [label="地图 Adapter\nBaidu JSAPI 4.0 / 坐标与相机",fillcolor="#e6e0fb"];
+ GPU [label="Compute Strategy\nWebGPU / CPU AABB",fillcolor="#e6e0fb"];
+ Render [label="Render Adapter\nWebGL 点线面 / 增量缓冲",fillcolor="#e6e0fb"];
+ Metric [label="横向验证层\nFPS / P95 / First Visible / Bytes / Export",fillcolor="#e4f3dc"];
+ Dataset -> Metric [style=dashed]; GPU -> Metric [style=dashed]; Render -> Metric [style=dashed];
+}

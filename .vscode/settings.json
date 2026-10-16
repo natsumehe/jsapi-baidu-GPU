@@ -1,3 +1,4 @@
 {
-    "cmake.sourceDirectory": "/Users/floder/baidu/ wasm-src"
+    "cmake.sourceDirectory": "/home/xianghua/Downloads/chushibanben/yangshan_phase4_tos_cargo_lifecycle 2/wasm-src",
+    "cmake.ignoreCMakeListsMissing": true
 }

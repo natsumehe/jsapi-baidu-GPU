@@ -290,6 +290,8 @@ interface Window {
         __YANGSHAN_STREAMING_BENCHMARK__?: {
             run(size: 10000 | 100000 | 500000 | 1000000): Promise<unknown>;
             runAll(): Promise<unknown[]>;
+            runAB(size: 10000 | 100000 | 500000 | 1000000): Promise<unknown>;
             results(): unknown[];
         };
+        __YANGSHAN_ENGINE_METRICS__?: () => unknown;
 }

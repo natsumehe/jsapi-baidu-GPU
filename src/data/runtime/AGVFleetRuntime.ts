@@ -2,460 +2,689 @@ import type { AGVDefinition } from "../source/AGVSimulationSource";
 import { CoordinateSystem } from "../../map/CoordinateSystem";
 import type { GISAGVRoute } from "../source/AGVGisRouteSource";
 
-export type AGVPhase =
-    | "QUAY_PICKUP"
-    | "YARD_STACK"
-    | "PARKING"
-    | "CHARGING"
-    | "RETURN_QUAY";
-
-export interface XY {
-    x: number;
-    y: number;
+/** Geometry is in locally projected metres; all speeds are metres/second. */
+export interface XY { x: number; y: number }
+export type AGVSceneZone = "GANTRY_END" | "GANTRY_SIDE_BUFFER" | "QUAY_SIDE";
+export type AGVPhase = "QUAY_PICKUP" | "YARD_STACK" | "RETURN_QUAY" | "RETURN_BUFFER" | "PARKING" | "CHARGING";
+export interface AGVTrackRecord {
+  sample:number; simulatedSeconds:number; x:number; y:number;
+  speedMps:number; heading:number; phase:AGVPhase; taskId:string;
+  source:"synthetic-history"|"live-simulation";
 }
-
+export interface AGVSegment { phase: AGVPhase; points: XY[]; speedMps: number; dwellSeconds: number }
 export interface AGVRuntimeState {
-    id: string;
-    assetId: string;
-    x: number;
-    y: number;
-    longitude: number;
-    latitude: number;
-    heading: number;
-    speed: number;
-    battery: number;
-    phase: AGVPhase;
-    berthId: string;
-    yardId: string;
-    parkingSlotId: string;
-    energyStationId: string;
-    taskId: string;
-    routeId: string;
-    containerId: string;
-    containerNo: string;
-    cargoStatus: "LOADING" | "LOADED" | "UNLOADING" | "EMPTY";
-    phaseProgress: number;
-    taskStatus: "WORKING" | "LOADING" | "LOADED" | "UNLOADING" | "PARKING" | "CHARGING" | "RETURNING";
-    cycleProgress: number;
-    /** Local-space position of the yard slot assigned to this container. */
-    yardX: number;
-    yardY: number;
-    /** Local-space animated cargo position; used for yard/crane handoff rendering. */
-    cargoX: number;
-    cargoY: number;
-    cargoVisible: boolean;
-    cargoAtYard: boolean;
-    cargoTransferProgress: number;
-    cargoTransferKind: "NONE" | "CRANE_TO_AGV" | "AGV_TO_YARD" | "YARD_TO_AGV";
+  id:string;assetId:string;x:number;y:number;longitude:number;latitude:number;
+  heading:number;speed:number;acceleration:number;battery:number;phase:AGVPhase;
+  berthId:string;yardId:string;parkingSlotId:string;energyStationId:string;
+  taskId:string;routeId:string;containerId:string;containerNo:string;
+  cargoStatus:"LOADING"|"LOADED"|"UNLOADING"|"EMPTY";
+  phaseProgress:number;taskStatus:"WORKING"|"LOADING"|"LOADED"|"UNLOADING"|"PARKING"|"CHARGING"|"RETURNING"|"WAITING";
+  cycleProgress:number;yardX:number;yardY:number;cargoX:number;cargoY:number;
+  cargoVisible:boolean;cargoAtYard:boolean;cargoTransferProgress:number;
+  cargoTransferKind:"NONE"|"CRANE_TO_AGV"|"AGV_TO_YARD"|"YARD_TO_AGV";
+  hasTask:boolean;taskCompleted:number;waitingForTraffic:boolean;
 }
-
-export interface AGVSegment {
-    phase: AGVPhase;
-    points: XY[];
-    speedMps: number;
-    dwellSeconds: number;
+interface Vehicle {
+  definition:AGVDefinition;segments:AGVSegment[];phaseDistances:number[];
+  phaseIndex:number;distance:number;dwell:number;active:boolean;speed:number;heading:number;
+  waitingForTraffic:boolean;taskCompleted:number;taskNumber:number;state:AGVRuntimeState;
+  quayCraneId:string;homeQuayCraneId:string;currentQuayCraneId:string;homePickup:AGVSegment;assignedYardId:string;assignedRouteId:string;variants:Array<{yardId:string;routeId:string;segment:AGVSegment;yardSlot:XY;syntheticConnector?:boolean}>;
+  history:AGVTrackRecord[];sampleClock:number;sampleNumber:number;initialSceneZone:AGVSceneZone|null;
 }
+const dist=(a:XY,b:XY)=>Math.hypot(a.x-b.x,a.y-b.y);
+const clamp=(n:number,a:number,b:number)=>Math.max(a,Math.min(b,n));
+const wrap=(angle:number)=>Math.atan2(Math.sin(angle),Math.cos(angle));
 
-interface SimVehicle {
-    definition: AGVDefinition;
-    segments: AGVSegment[];
-    phaseDistances: number[];
-    totalCycleSeconds: number;
-    time: number;
-    state: AGVRuntimeState;
-}
-
+/**
+ * Event-driven import demo fleet. Vehicles remain in surveyed buffer slots until
+ * explicitly dispatched; after unloading they drive back and stay parked.
+ * Acceleration, service braking, heading slew, collision time-gap and deterministic
+ * resource ownership are simulated (not a safety-certified AGV controller).
+ */
 export class AGVFleetRuntime {
-    readonly vehicles: SimVehicle[] = [];
-    private simulationSpeed = 1;
-    private running = true;
-    private yardSlots: XY[] = [];
+  readonly vehicles: Vehicle[] = [];
+  private running=true;
+  private simulationSpeed=1;
+  private yardSlots:XY[]=[];
+  /** GIS-derived navigable graph. QC connectors are screened against yard polygons;
+   * only the source GIS QC->yard corridors may terminate at a Gantry. */
+  private quayGraph=new Map<string,Array<{to:string;points:XY[];length:number;id:string}>>();
+  private quayPositions=new Map<string,XY>();
+  private yardEntrances=new Map<string,Array<{quay:string;segment:AGVSegment;yardSlot:XY;routeId:string}>>();
+  private edgeReservations=new Map<string,number>();
+  private tick=0;
+  private clockSeconds=0;
+  private continuousWorkload=false;
+  private sceneSeeded=false;
+  private readonly historyLimit=3600;
+  private readonly sampleInterval=.25;
+  private readonly accel=1.15;
+  private readonly decel=1.9;
+  private readonly turnRate=0.52;
+  private readonly maxLateral=1.5;
+  private readonly vehicleLength=7.2;
+  private readonly vehicleWidth=3.0;
+  private readonly gap=3.2;
+  private readonly timeHeadway=1.4;
+  constructor(private readonly coordinateSystem: CoordinateSystem) {}
 
-    constructor(
-        private readonly coordinateSystem: CoordinateSystem
-    ) {}
-
-    load(definitions: AGVDefinition[], gisRoutes?: Map<string, GISAGVRoute>, yardSlots: XY[] = []): void {
-        this.yardSlots = yardSlots.length ? yardSlots.map(p => ({ ...p })) : [];
-        this.vehicles.length = 0;
-
-        definitions.forEach((definition, vehicleIndex) => {
-            const gisRoute = gisRoutes?.get(definition.id);
-            if (!gisRoute || gisRoute.phases.length !== 5) {
-                throw new Error(`Missing GIS-constrained route for ${definition.id}.`);
-            }
-
-            // Important: no legacy synthetic road-network fallback is used here.
-            // Every AGV moving phase comes from the uploaded lane-centerline graph;
-            // container-yard polygons are used as exclusion zones.
-            const segments: AGVSegment[] = gisRoute.phases.map(phase => ({
-                phase: phase.phase,
-                points: phase.points.map(point => ({ x: point.x, y: point.y })),
-                speedMps: phase.speedMps,
-                dwellSeconds: phase.dwellSeconds
-            }));
-
-            const phaseDistances = segments.map(segment => {
-                let d = 0;
-                for (let i = 1; i < segment.points.length; i++) {
-                    d += this.distance(segment.points[i - 1], segment.points[i]);
-                }
-                return d;
-            });
-
-            const totalCycleSeconds = segments.reduce(
-                (sum, segment, index) =>
-                    sum + phaseDistances[index] / Math.max(segment.speedMps, 0.001) + segment.dwellSeconds,
-                0
-            );
-
-            // The source fleet intentionally keeps phaseOffset at zero. Stagger vehicles
-            // across their own route cycles, then greedily choose the candidate phase
-            // that maximizes distance from already spawned AGVs. This prevents the
-            // initial scene from looking like a traffic jam while remaining deterministic.
-            const baseStagger = ((vehicleIndex * 0.61803398875) % 1 + (definition.phaseOffset || 0)) % 1;
-            const candidateOffsets = Array.from({ length: 32 }, (_, k) => (baseStagger + k / 32) % 1);
-            let selectedOffset = baseStagger;
-            let selectedSeparation = -1;
-            for (const candidate of candidateOffsets) {
-                const candidateState = this.sampleVehicle({
-                    definition, segments, phaseDistances, totalCycleSeconds,
-                    time: candidate * totalCycleSeconds, state: null as never
-                }, candidate * totalCycleSeconds);
-                const nearest = this.vehicles.reduce((min, vehicle) =>
-                    Math.min(min, this.distance(candidateState, vehicle.state)),
-                    Number.POSITIVE_INFINITY
-                );
-                if (nearest > selectedSeparation) {
-                    selectedSeparation = nearest;
-                    selectedOffset = candidate;
-                }
-            }
-            const time = selectedOffset * totalCycleSeconds;
-            const skeleton: SimVehicle = {
-                definition,
-                segments,
-                phaseDistances,
-                totalCycleSeconds,
-                time,
-                state: null as never
-            };
-            skeleton.state = this.sampleVehicle(skeleton, time);
-            this.vehicles.push(skeleton);
-        });
+  load(definitions:AGVDefinition[], gisRoutes?:Map<string,GISAGVRoute>,yardSlots:XY[]=[],
+    forbiddenYards:XY[][]=[]):void {
+    this.yardSlots=yardSlots.map(p=>({...p}));this.vehicles.length=0;
+    this.clockSeconds=0;this.sceneSeeded=false;
+    this.quayGraph.clear();this.quayPositions.clear();this.yardEntrances.clear();this.edgeReservations.clear();
+    type RouteVariant={yardId:string;routeId:string;segment:AGVSegment;yardSlot:XY;syntheticConnector?:boolean};
+    const variantsByQuay=new Map<string,RouteVariant[]>();
+    const quayPositions=new Map<string,XY>();
+    for(const [index,def] of definitions.entries()){
+      const route=gisRoutes?.get(def.id);if(!route)continue;
+      const segment=route.phases[1];
+      quayPositions.set(route.quayCraneId,segment.points[0]);
+      const variant={yardId:route.yardId,routeId:route.routeId,segment:{phase:'YARD_STACK' as AGVPhase,
+        points:segment.points.map(p=>({x:p.x,y:p.y})),speedMps:segment.speedMps,dwellSeconds:segment.dwellSeconds},
+        yardSlot:yardSlots[index]??route.phases[1].points.at(-1)!};
+      const yardRoutes=this.yardEntrances.get(route.yardId)??[];
+      if(!yardRoutes.some(e=>e.quay===route.quayCraneId)){
+        yardRoutes.push({quay:route.quayCraneId,segment:variant.segment,
+          yardSlot:{...variant.yardSlot},routeId:route.routeId});
+        this.yardEntrances.set(route.yardId,yardRoutes);
+      }
+      const options=variantsByQuay.get(route.quayCraneId)??[];
+      if(!options.some(o=>o.yardId===variant.yardId))options.push(variant);
+      variantsByQuay.set(route.quayCraneId,options);
     }
-
-    update(deltaSeconds: number): void {
-        if (!this.running) return;
-
-        const delta = deltaSeconds * this.simulationSpeed;
-        for (const vehicle of this.vehicles) {
-            vehicle.time = (vehicle.time + delta) % vehicle.totalCycleSeconds;
-            vehicle.state = this.sampleVehicle(vehicle, vehicle.time);
+    // Optional synthetic QC-to-QC interchanges create a bipartite many-to-many
+    // experiment topology. Only nearby QC pairs are considered, and the entire
+    // connector segment is checked against every supplied yard polygon.
+    // They are NOT surveyed lanes or industrially validated traffic routes.
+    const orientation=(a:XY,b:XY,c:XY)=>(b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+    const onSegment=(a:XY,b:XY,p:XY)=>Math.min(a.x,b.x)-1e-5<=p.x&&p.x<=Math.max(a.x,b.x)+1e-5&&
+      Math.min(a.y,b.y)-1e-5<=p.y&&p.y<=Math.max(a.y,b.y)+1e-5;
+    const crosses=(a:XY,b:XY,c:XY,d:XY)=>{
+      const x=orientation(a,b,c),y=orientation(a,b,d),z=orientation(c,d,a),w=orientation(c,d,b);
+      return (x*y<0&&z*w<0)||
+        (Math.abs(x)<1e-7&&onSegment(a,b,c))||(Math.abs(y)<1e-7&&onSegment(a,b,d))||
+        (Math.abs(z)<1e-7&&onSegment(c,d,a))||(Math.abs(w)<1e-7&&onSegment(c,d,b));
+    };
+    const inside=(point:XY,poly:XY[])=>{
+      let yes=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+        const a=poly[i],b=poly[j];if((a.y>point.y)!==(b.y>point.y)&&point.x<(b.x-a.x)*(point.y-a.y)/(b.y-a.y)+a.x)yes=!yes;
+      }return yes;
+    };
+    const clear=(a:XY,b:XY)=>forbiddenYards.every(poly=>{
+      if(inside(a,poly)||inside(b,poly)||inside({x:(a.x+b.x)/2,y:(a.y+b.y)/2},poly))return false;
+      for(let i=0;i<poly.length;i++)if(crosses(a,b,poly[i],poly[(i+1)%poly.length]))return false;
+      return true;
+    });
+    if(forbiddenYards.length){
+      const direct:Array<[string,RouteVariant[]]>=[...variantsByQuay].map(([key,options])=>[key,[...options]]);
+      for(const [originKey,originOptions] of direct){
+        const a=quayPositions.get(originKey)!;
+        for(const [targetKey,targetOptions] of direct){
+          if(originKey===targetKey)continue;
+          const b=quayPositions.get(targetKey)!;
+          if(dist(a,b)>145||!clear(a,b))continue;
+          for(const v of targetOptions){
+            if(originOptions.some(o=>o.yardId===v.yardId))continue;
+            originOptions.push({yardId:v.yardId,routeId:`SYN-${originKey}-${v.yardId}`,
+              segment:{...v.segment,points:[{...a},...v.segment.points.map(p=>({...p}))]},
+              yardSlot:{...v.yardSlot},syntheticConnector:true});
+          }
         }
+        originOptions.sort((a,b)=>a.yardId.localeCompare(b.yardId));
+        variantsByQuay.set(originKey,originOptions);
+      }
     }
+    this.quayPositions=new Map(quayPositions);
+    // Build a shared *geometry* graph, not shared vehicle itineraries. Every AGV
+    // later computes its own start-to-pickup-to-yard path and can choose a different
+    // route on its next task. Yard nodes are never used as through-roads.
+    for(const [id] of quayPositions)this.quayGraph.set(id,[]);
+    const quayList=[...quayPositions.entries()];
+    for(let i=0;i<quayList.length;i++)for(let j=i+1;j<quayList.length;j++){
+      const [a,pa]=quayList[i], [b,pb]=quayList[j];
+      if(dist(pa,pb)>145 || (forbiddenYards.length>0&&!clear(pa,pb)))continue;
+      const distance=dist(pa,pb),id=`QC-LINK:${[a,b].sort().join(':')}`;
+      this.quayGraph.get(a)!.push({to:b,points:[{...pa},{...pb}],length:distance,id});
+      this.quayGraph.get(b)!.push({to:a,points:[{...pb},{...pa}],length:distance,id});
+    }
+    for(let index=0;index<definitions.length;index++){
+      const definition=definitions[index],route=gisRoutes?.get(definition.id);
+      if(!route||route.phases.length!==5)throw Error(`Missing GIS route for ${definition.id}`);
+      const original=route.phases.map(s=>({phase:s.phase,points:s.points.map(p=>({x:p.x,y:p.y})),speedMps:s.speedMps,dwellSeconds:s.dwellSeconds}));
+      // Yard -> quay returns on the validated reverse cargo corridor; a separate
+      // quay -> buffer segment is used ONLY when no new assignment remains.
+      const reverse=(s:AGVSegment,phase:AGVPhase):AGVSegment=>({phase,points:[...s.points].reverse().map(p=>({...p})),speedMps:s.speedMps,dwellSeconds:0});
+      const segments:AGVSegment[]=[original[0],original[1],{...reverse(original[1],'RETURN_QUAY'),dwellSeconds:original[0].dwellSeconds},
+        reverse(original[0],'RETURN_BUFFER'),original[3],original[4]];
+      const phaseDistances=segments.map(s=>s.points.slice(1).reduce((sum,p,i)=>sum+dist(p,s.points[i]),0));
+      const vehicle:Vehicle={definition,segments,phaseDistances,phaseIndex:4,distance:0,dwell:0,active:false,speed:0,heading:0,waitingForTraffic:false,taskCompleted:0,taskNumber:0,state:null as never,
+        quayCraneId:route.quayCraneId,homeQuayCraneId:route.quayCraneId,
+        currentQuayCraneId:route.quayCraneId,homePickup:{...original[0],points:original[0].points.map(p=>({...p}))},
+        assignedYardId:route.yardId,assignedRouteId:route.routeId,variants:variantsByQuay.get(route.quayCraneId)??[],
+        history:[],sampleClock:0,sampleNumber:0,initialSceneZone:null};
+      const park=segments[4].points[0];const toward=segments[0].points[Math.min(1,segments[0].points.length-1)];
+      vehicle.heading=Math.atan2(toward.y-park.y,toward.x-park.x);
+      vehicle.state=this.makeState(vehicle,park,0);
+      this.seedSyntheticHistory(vehicle);
+      this.vehicles.push(vehicle);
+    }
+  }
 
-    /** Return the selected vehicle's already-traversed path in the current cycle.
-     *  This is the history line shown when an AGV is selected.
-     */
-    getHistoryPath(index: number): XY[] {
-        const vehicle = this.vehicles[index];
-        if (!vehicle) return [];
-        let cursor = vehicle.time;
-        const history: XY[] = [];
-        for (let i = 0; i < vehicle.segments.length; i++) {
-            const segment = vehicle.segments[i];
-            const distance = vehicle.phaseDistances[i];
-            const travelSeconds = distance / Math.max(segment.speedMps, 0.001);
-            if (distance > 0.001 && segment.speedMps > 0 && cursor <= travelSeconds) {
-                const traveled = segment.speedMps * cursor;
-                history.push(...this.polylinePrefix(segment.points, traveled));
-                return this.dedupeHistory(history);
-            }
-            history.push(...segment.points);
-            cursor -= travelSeconds;
-            if (cursor <= segment.dwellSeconds) {
-                return this.dedupeHistory(history);
-            }
-            cursor -= segment.dwellSeconds;
+  /**
+   * Synthetic lifecycle snapshot for visualization ONLY. Fleet starts across
+   * the *real route geometry* rather than bunching up at the buffer exit after
+   * 50 s of prewarming. No AGV jumps position after the simulation begins:
+   * subsequent updates use the existing acceleration, cornering and SAT checks.
+   * This is not recorded GPS telemetry and is not a dispatch recommendation.
+   *
+   * Approximate sector quotas for 155 vehicles: 39 at the Gantry end, 46 on
+   * the Gantry-side approach / GIS parking strip, and 70 toward the quay.
+   * The buffer remains a legitimate idle state when no task is available.
+   */
+  seedLifecycleScene(): {target:Record<AGVSceneZone,number>;actual:Record<AGVSceneZone,number>;parked:number;unplaced:number} {
+    if(this.sceneSeeded||this.vehicles.some(v=>v.active)){
+      throw new Error("Seed a lifecycle scene only once, before dispatching tasks");
+    }
+    this.sceneSeeded=true;
+    const n=this.vehicles.length;
+    const zones:AGVSceneZone[]=['GANTRY_END','GANTRY_SIDE_BUFFER','QUAY_SIDE'];
+    const target:Record<AGVSceneZone,number>={
+      GANTRY_END:Math.round(n*.25),GANTRY_SIDE_BUFFER:Math.floor(n*.30),QUAY_SIDE:0
+    };
+    target.QUAY_SIDE=n-target.GANTRY_END-target.GANTRY_SIDE_BUFFER;
+    const actual:Record<AGVSceneZone,number>={GANTRY_END:0,GANTRY_SIDE_BUFFER:0,QUAY_SIDE:0};
+    // Interleave parking-zone IDs so Gantry and quay groups are distributed
+    // longitudinally over the whole surveyed strip, never one end only.
+    // 67 is coprime with 155, as is the fallback stride 1 for other fleet sizes.
+    const stride=n===155?67:1;
+    const order=Array.from({length:n},(_,i)=>this.vehicles[(i*stride)%n]);
+    const assigned=new Set<Vehicle>();
+    const footprints:Array<{position:XY;heading:number;vehicle:Vehicle}>=[];
+    const canStage=(v:Vehicle,position:XY,heading:number)=>{
+      // Include initially parked vehicles which will remain idle or are not yet
+      // staged, preventing visually interpenetrating vehicles at the shoreline.
+      for(const other of footprints){
+        if(other.vehicle!==v&&this.footprintsConflict(position,heading,other.position,other.heading))return false;
+      }
+      for(const other of this.vehicles){
+        if(other===v||assigned.has(other))continue;
+        if(this.footprintsConflict(position,heading,other.state,other.state.heading))return false;
+      }
+      return true;
+    };
+    const candidatePhases=(zone:AGVSceneZone,vehicleIndex:number)=>{
+      const jitter=((vehicleIndex*29+17)%31)/31;
+      if(zone==='GANTRY_END')return [
+        {phase:1,progress:.78+.17*jitter},{phase:2,progress:.04+.17*jitter},
+        {phase:1,progress:.61+.16*jitter}
+      ];
+      if(zone==='GANTRY_SIDE_BUFFER')return [
+        {phase:1,progress:.47+.26*jitter},{phase:2,progress:.25+.27*jitter},
+        {phase:1,progress:.32+.20*jitter}
+      ];
+      return [
+        {phase:0,progress:.69+.28*jitter},{phase:2,progress:.73+.25*jitter},
+        {phase:1,progress:.03+.22*jitter},{phase:0,progress:.38+.32*jitter}
+      ];
+    };
+    // Prioritize Gantry-end placements, which are the hardest to see in V7.
+    // Preserve some authentic GIS parking positions in the second group.
+    for(const zone of zones){
+      const maximum=target[zone];
+      let count=0;
+      for(const v of order){
+        if(count>=maximum)break;
+        if(assigned.has(v))continue;
+        const number=Number.parseInt(v.definition.id.match(/(\d+)$/)?.[1]??'1',10);
+        // A portion of the 30% cohort remains idle, *at its original buffer
+        // point*, never at a fabricated parking position next to the Gantry.
+        const remainParked=zone==='GANTRY_SIDE_BUFFER'&&(count%4===0);
+        if(remainParked){
+          v.initialSceneZone=zone;assigned.add(v);count++;actual[zone]++;continue;
         }
-        return this.dedupeHistory(history);
-    }
-
-    setRunning(running: boolean): void {
-        this.running = running;
-    }
-
-    isRunning(): boolean {
-        return this.running;
-    }
-
-    setSimulationSpeed(value: number): void {
-        this.simulationSpeed = Math.max(0.1, Math.min(8, value));
-    }
-
-    getSimulationSpeed(): number {
-        return this.simulationSpeed;
-    }
-
-    getStats(): {
-        total: number;
-        moving: number;
-        parking: number;
-        charging: number;
-        returnQuay: number;
-        yardStack: number;
-        avgBattery: number;
-    } {
-        let parking = 0;
-        let charging = 0;
-        let returnQuay = 0;
-        let yardStack = 0;
-        let battery = 0;
-
-        for (const vehicle of this.vehicles) {
-            battery += vehicle.state.battery;
-            if (vehicle.state.phase === "PARKING") parking++;
-            else if (vehicle.state.phase === "CHARGING") charging++;
-            else if (vehicle.state.phase === "RETURN_QUAY") returnQuay++;
-            else if (vehicle.state.phase === "YARD_STACK") yardStack++;
-        }
-
-        // "Moving" = every in-motion phase (QUAY_PICKUP + YARD_STACK + RETURN_QUAY).
-        // Only PARKING / CHARGING are stationary, so the dashboard reflects that the
-        // fleet is mostly running.
-        const moving = this.vehicles.length - parking - charging;
-
-        return {
-            total: this.vehicles.length,
-            moving,
-            parking,
-            charging,
-            returnQuay,
-            yardStack,
-            avgBattery: this.vehicles.length ? battery / this.vehicles.length : 0
-        };
-    }
-
-    getCycleProgress(index: number): number {
-        const vehicle = this.vehicles[index];
-        if (!vehicle || vehicle.totalCycleSeconds <= 0) return 0;
-        return Math.max(0, Math.min(1, vehicle.time / vehicle.totalCycleSeconds));
-    }
-
-    getSelectedState(index = 77): AGVRuntimeState | null {
-        return this.vehicles[index]?.state ?? null;
-    }
-
-    private sampleVehicle(vehicle: SimVehicle, time: number): AGVRuntimeState {
-        let cursor = time;
-
-        for (let i = 0; i < vehicle.segments.length; i++) {
-            const segment = vehicle.segments[i];
-            const distance = vehicle.phaseDistances[i];
-            const travelSeconds = distance / Math.max(segment.speedMps, 0.001);
-
-            if (distance > 0.001 && segment.speedMps > 0 && cursor <= travelSeconds) {
-                const position = this.samplePolyline(segment.points, segment.speedMps * cursor);
-                const next = this.samplePolyline(segment.points, Math.min(distance, segment.speedMps * cursor + 0.8));
-                return this.createState(vehicle, position, next, segment, i, cursor / Math.max(travelSeconds, 0.001), segment.speedMps);
+        // chooseVariant mutates only route assignment and does not move a car.
+        v.taskNumber=1;this.chooseVariant(v);
+        const candidates=candidatePhases(zone,number);
+        let chosen:{phase:number;position:XY;heading:number;distance:number}|null=null;
+        for(const candidate of candidates){
+          const seg=v.segments[candidate.phase],len=v.phaseDistances[candidate.phase];
+          // Search nearby legal arclengths when another AGV occupies a proposed
+          // slot. This spreads the simulated snapshot without inventing roads.
+          for(const offset of [0,-.055,.055,-.11,.11,-.18,.18,-.25,.25]){
+            const progress=clamp(candidate.progress+offset,.025,.975);
+            const distance=len*progress,position=this.onPath(seg.points,distance);
+            const heading=this.tangent(seg.points,distance);
+            if(canStage(v,position,heading)){
+              chosen={phase:candidate.phase,position,heading,distance};break;
             }
-
-            cursor -= travelSeconds;
-            if (cursor <= segment.dwellSeconds) {
-                const end = segment.points[segment.points.length - 1];
-                const previous = segment.points[Math.max(0, segment.points.length - 2)];
-                return this.createState(vehicle, end, previous, segment, i, 1, 0, cursor);
-            }
-            cursor -= segment.dwellSeconds;
+          }
+          if(chosen)break;
         }
-
-        return this.sampleVehicle(vehicle, 0);
+        if(!chosen){v.taskNumber=0;continue;}
+        v.phaseIndex=chosen.phase;v.distance=chosen.distance;v.dwell=0;
+        v.speed=0;v.heading=chosen.heading;v.active=true;v.waitingForTraffic=false;
+        v.initialSceneZone=zone;
+        v.state=this.makeState(v,chosen.position,v.phaseDistances[v.phaseIndex]>0?
+          chosen.distance/v.phaseDistances[v.phaseIndex]:0);
+        footprints.push({position:chosen.position,heading:chosen.heading,vehicle:v});
+        assigned.add(v);count++;actual[zone]++;
+      }
     }
+    return {target,actual,parked:this.vehicles.filter(v=>!v.active).length,
+      unplaced:n-Object.values(actual).reduce((a,b)=>a+b,0)};
+  }
 
-    private createState(
-        vehicle: SimVehicle,
-        position: XY,
-        next: XY,
-        segment: AGVSegment,
-        phaseIndex: number,
-        progress: number,
-        speed: number,
-        dwellProgress = 0
-    ): AGVRuntimeState {
-        const definition = vehicle.definition;
-        const geo = this.coordinateSystem.localToGeo({ ...position, z: 0 });
-        const heading = Math.atan2(next.y - position.y, next.x - position.x);
-        const battery = segment.phase === "CHARGING"
-            ? Math.min(100, definition.battery + 60 * (dwellProgress / Math.max(segment.dwellSeconds, 0.001)))
-            : this.estimateBattery(definition.battery, phaseIndex, progress);
+  /** These are INITIAL simulated stage counts, not live GPS region counts. */
+  getInitialSceneDistribution():Record<AGVSceneZone,number>{
+    const result:Record<AGVSceneZone,number>={GANTRY_END:0,GANTRY_SIDE_BUFFER:0,QUAY_SIDE:0};
+    for(const v of this.vehicles)if(v.initialSceneZone)result[v.initialSceneZone]++;
+    return result;
+  }
 
-        const yard = this.yardSlots[this.idNumber(definition.id) - 1] ?? segment.points[segment.points.length - 1];
-        const yardX = yard.x;
-        const yardY = yard.y;
+  /** A task is issued only when requested; no modulo-time automatic redispatch. */
+  dispatchTask(id:string):boolean {
+    const v=this.vehicles.find(v=>v.definition.id===id);
+    if(!v||v.active||v.phaseIndex!==4)return false;
+    v.phaseIndex=0;v.distance=0;v.dwell=0;v.speed=0;v.active=true;
+    v.waitingForTraffic=false;v.taskNumber++;
+    this.chooseVariant(v);
+    v.state=this.makeState(v,v.segments[0].points[0],0);
+    return true;
+  }
+  dispatchBatch(max=12):number {
+    let count=0;
+    for(const v of this.vehicles){if(count>=max)break;if(this.dispatchTask(v.definition.id))count++;}
+    return count;
+  }
+  getPendingCount():number {return this.vehicles.filter(v=>!v.active).length;}
+  /**
+   * Spatially balanced departure waves. Parking slots follow the surveyed GIS
+   * buffer strip; choose across five sections and across source QCs instead of
+   * dispatching every car into the same merging aisle on one frame.
+   * Does not teleport cars or bypass swept-footprint collision checks.
+   */
+  dispatchDistributed(max=10):number {
+    const n=this.vehicles.length;
+    if(!n||max<=0)return 0;
+    const sectors=5, perSector=Math.ceil(n/sectors);
+    const section=(v:Vehicle)=>Math.min(sectors-1,Math.floor((v.definition.parkingSlot-1)/perSector));
+    const activeBySection=new Array<number>(sectors).fill(0);
+    const activeByQuay=new Map<string,number>();
+    for(const v of this.vehicles)if(v.active){
+      activeBySection[section(v)]++;
+      activeByQuay.set(v.quayCraneId,(activeByQuay.get(v.quayCraneId)??0)+1);
+    }
+    let dispatched=0;
+    const used=new Set<string>();
+    while(dispatched<max){
+      let candidate:Vehicle|null=null,score=Infinity;
+      for(const v of this.vehicles){
+        if(v.active||v.phaseIndex!==4||used.has(v.definition.id))continue;
+        // Prefer distinct sectors first, and then the least busy quay.
+        const quayLoad=activeByQuay.get(v.quayCraneId)??0;
+        const sectorLoad=activeBySection[section(v)];
+        const nextScore=sectorLoad*10+quayLoad*4+
+          ((v.definition.parkingSlot*37+this.tick)%Math.max(n,1))/Math.max(n,1);
+        if(nextScore<score){score=nextScore;candidate=v;}
+      }
+      if(!candidate)break;
+      used.add(candidate.definition.id);
+      if(this.dispatchTask(candidate.definition.id)){
+        dispatched++;
+        activeBySection[section(candidate)]++;
+        activeByQuay.set(candidate.quayCraneId,(activeByQuay.get(candidate.quayCraneId)??0)+1);
+      }
+    }
+    return dispatched;
+  }
 
-        // Cargo exchange is visualized as a real handoff:
-        // 1) crane -> AGV during QUAY_PICKUP;
-        // 2) AGV -> assigned yard slot during YARD_STACK;
-        // 3) a short yard re-handling window at the end of YARD_STACK shows
-        //    the next container moving yard -> AGV before the vehicle leaves.
-        // The next cycle then carries that next task's container metadata.
-        let cargoStatus: AGVRuntimeState["cargoStatus"] = "EMPTY";
-        let cargoX = position.x;
-        let cargoY = position.y;
-        let cargoVisible = false;
-        let cargoAtYard = false;
-        let cargoTransferProgress = 0;
-        let cargoTransferKind: AGVRuntimeState["cargoTransferKind"] = "NONE";
 
-        if (segment.phase === "QUAY_PICKUP") {
-            cargoVisible = true;
-            if (progress < 0.35) {
-                cargoStatus = "LOADING";
-                cargoTransferKind = "CRANE_TO_AGV";
-                cargoTransferProgress = progress / 0.35;
-                const crane = segment.points[0];
-                const t = Math.max(0, Math.min(1, cargoTransferProgress));
-                cargoX = crane.x + (position.x - crane.x) * t;
-                cargoY = crane.y + (position.y - crane.y) * t;
-            } else {
-                cargoStatus = "LOADED";
-                cargoX = position.x;
-                cargoY = position.y;
-            }
-        } else if (segment.phase === "YARD_STACK") {
-            cargoVisible = true;
-            if (progress < 0.78) {
-                cargoStatus = "LOADED";
-                cargoX = position.x;
-                cargoY = position.y;
-            } else if (progress < 0.90) {
-                cargoStatus = "UNLOADING";
-                cargoTransferKind = "AGV_TO_YARD";
-                cargoTransferProgress = (progress - 0.78) / 0.12;
-                const t = Math.max(0, Math.min(1, cargoTransferProgress));
-                cargoX = position.x + (yardX - position.x) * t;
-                cargoY = position.y + (yardY - position.y) * t;
-            } else {
-                // The current box is now stacked. Keep a yard box visible and
-                // show a second, short re-handling operation: the next box is
-                // lifted from the stack back onto the AGV before departure.
-                cargoAtYard = true;
-                cargoStatus = "LOADING";
-                cargoTransferKind = "YARD_TO_AGV";
-                cargoTransferProgress = (progress - 0.90) / 0.10;
-                const t = Math.max(0, Math.min(1, cargoTransferProgress));
-                cargoX = yardX + (position.x - yardX) * t;
-                cargoY = yardY + (position.y - yardY) * t;
-            }
-        } else {
-            cargoStatus = "EMPTY";
+  update(deltaSeconds:number):void {
+    if(!this.running||deltaSeconds<=0)return;
+    let remaining=clamp(deltaSeconds*this.simulationSpeed,0,.35);
+    while(remaining>0){const dt=Math.min(.05,remaining);remaining-=dt;this.tick++;
+      // Rotating priority prevents systematically blocking the last vehicle ID.
+      const count=this.vehicles.length,offset=this.tick%Math.max(count,1);
+      this.clockSeconds+=dt;
+      for(let i=0;i<count;i++)this.stepVehicle(this.vehicles[(i+offset)%count],dt);
+      for(const v of this.vehicles)this.appendSample(v,dt);
+    }
+  }
+
+  private stepVehicle(v:Vehicle,dt:number):void {
+    if(!v.active)return;
+    const seg=v.segments[v.phaseIndex],length=v.phaseDistances[v.phaseIndex];
+    const position=this.onPath(seg.points,v.distance);
+    const rest=Math.max(0,length-v.distance);
+    if(rest<.025){
+      v.speed=0;v.distance=length;
+      if(v.dwell<seg.dwellSeconds && (v.phaseIndex!==2 || this.continuousWorkload)){v.dwell=Math.min(seg.dwellSeconds,v.dwell+dt);v.state=this.makeState(v,seg.points.at(-1)!,1);return;}
+      const finished=v.phaseIndex;
+      v.phaseIndex++;v.distance=0;v.dwell=0;
+      if(finished===2){
+        v.taskCompleted++;
+        v.currentQuayCraneId=v.quayCraneId;
+        if(this.continuousWorkload){
+          // Each new task is independently planned FROM this AGV's actual QC.
+          // Phase 0 contains the empty inter-QC transfer and pickup dwell;
+          // never jump directly into loaded transport at another QC.
+          v.taskNumber++;this.chooseVariant(v,true);v.phaseIndex=0;
         }
-
-        return {
-            id: definition.id,
-            assetId: definition.assetId,
-            x: position.x,
-            y: position.y,
-            longitude: Number(geo.longitude.toFixed(8)),
-            latitude: Number(geo.latitude.toFixed(8)),
-            heading,
-            speed,
-            battery,
-            phase: segment.phase,
-            berthId: definition.berthId,
-            yardId: definition.yardId,
-            parkingSlotId: `PARK-${String(Math.floor((definition.parkingSlot - 1) / 31) + 1).padStart(2, "0")}-${String(((definition.parkingSlot - 1) % 31) + 1).padStart(2, "0")}`,
-            energyStationId: definition.energyStationId,
-            taskId: definition.taskId,
-            routeId: definition.routeId,
-            containerId: `CNTR-${String(this.idNumber(definition.id)).padStart(7, "0")}`,
-            containerNo: `SYN${String(this.idNumber(definition.id)).padStart(7, "0")}`,
-            cargoStatus,
-            phaseProgress: Math.max(0, Math.min(1, progress)),
-            taskStatus:
-                segment.phase === "QUAY_PICKUP" ? (progress < 0.35 ? "LOADING" : "LOADED") :
-                segment.phase === "YARD_STACK" ? (progress > 0.90 ? "LOADING" : (progress > 0.78 ? "UNLOADING" : "LOADED")) :
-                segment.phase === "PARKING" ? "PARKING" :
-                segment.phase === "CHARGING" ? "CHARGING" :
-                "RETURNING",
-            cycleProgress: Math.max(0, Math.min(1, (
-                vehicle.segments.slice(0, phaseIndex).reduce((sum, s, idx) => sum + vehicle.phaseDistances[idx] / Math.max(s.speedMps, 0.001) + s.dwellSeconds, 0) +
-                (vehicle.phaseDistances[phaseIndex] / Math.max(segment.speedMps, 0.001)) * Math.max(0, Math.min(1, progress))
-            ) / Math.max(vehicle.totalCycleSeconds, 0.001))),
-            yardX,
-            yardY,
-            cargoX,
-            cargoY,
-            cargoVisible,
-            cargoAtYard,
-            cargoTransferProgress,
-            cargoTransferKind
-        };
+      }
+      if(finished===3){ // Quay -> GIS buffer completed; park without a new task.
+        v.phaseIndex=4;v.active=false;
+      }
+      v.state=this.makeState(v,v.segments[v.phaseIndex].points[0],0);return;
     }
+    const heading=this.tangent(seg.points,v.distance);
+    const lookAhead=this.tangent(seg.points,Math.min(length,v.distance+Math.max(4,2*v.speed)));
+    const bend=Math.abs(wrap(lookAhead-heading));
+    const curveCap=bend>.05?Math.sqrt(this.maxLateral*Math.max(3,8)/Math.max(bend,.05)):seg.speedMps;
+    const stopCap=Math.sqrt(2*this.decel*rest);
+    const headingError=Math.abs(wrap(heading-v.heading));
+    // On corners, slow before rotating rather than teleporting heading.
+    const steerCap=headingError>.35?Math.max(.6,seg.speedMps*(.35/headingError)):seg.speedMps;
+    const target=Math.max(0,Math.min(seg.speedMps,curveCap,stopCap,steerCap));
+    let requested=clamp(target-v.speed,-this.decel*dt,this.accel*dt);
+    let newSpeed=clamp(v.speed+requested,0,seg.speedMps);
+    const proposed=this.onPath(seg.points,Math.min(length,v.distance+newSpeed*dt));
+    const desired=this.tangent(seg.points,Math.min(length,v.distance+newSpeed*dt+.5));
+    const proposedHeading=v.heading+clamp(wrap(desired-v.heading),-this.turnRate*dt,this.turnRate*dt);
+    const blocked=this.trafficBlock(v,position,proposed,newSpeed,proposedHeading);
+    if(blocked){newSpeed=0;requested=-v.speed;v.waitingForTraffic=true;}
+    else v.waitingForTraffic=false;
+    const moved=newSpeed*dt;
+    v.distance=Math.min(length,v.distance+moved);
+    v.speed=newSpeed;
+    // Rotating a stopped AGV can also strike a neighbour: keep its heading
+    // unchanged whenever the predicted swept footprint is blocked.
+    if(!blocked)v.heading=proposedHeading;
+    v.state=this.makeState(v,this.onPath(seg.points,v.distance),length>0?v.distance/length:1,requested/Math.max(dt,.001));
+  }
 
-    private samplePolyline(points: XY[], distance: number): XY {
-        if (points.length === 0) return { x: 0, y: 0 };
-        if (points.length === 1) return { ...points[0] };
+  /** Oriented-rectangle overlap (separating axis test) with 0.6 m safety
+   * clearance on each full footprint. Unlike a bounding circle this lets a
+   * vehicle drive down narrow lanes beside parked AGVs without false blocks.
+   */
+  private footprintsConflict(a:XY,aHeading:number,b:XY,bHeading:number):boolean {
+    const fa={x:Math.cos(aHeading),y:Math.sin(aHeading)};
+    const sa={x:-fa.y,y:fa.x};
+    const fb={x:Math.cos(bHeading),y:Math.sin(bHeading)};
+    const sb={x:-fb.y,y:fb.x};
+    const delta={x:b.x-a.x,y:b.y-a.y};
+    const dot=(u:XY,v:XY)=>u.x*v.x+u.y*v.y;
+    const hl=this.vehicleLength*.5,hw=this.vehicleWidth*.5;
+    for(const axis of [fa,sa,fb,sb]){
+      const rA=hl*Math.abs(dot(fa,axis))+hw*Math.abs(dot(sa,axis));
+      const rB=hl*Math.abs(dot(fb,axis))+hw*Math.abs(dot(sb,axis));
+      if(Math.abs(dot(delta,axis))>rA+rB+.65)return false;
+    }
+    return true;
+  }
 
-        let remaining = Math.max(0, distance);
-        for (let i = 1; i < points.length; i++) {
-            const a = points[i - 1];
-            const b = points[i];
-            const length = this.distance(a, b);
-            if (remaining <= length || i === points.length - 1) {
-                const t = length > 0 ? Math.max(0, Math.min(1, remaining / length)) : 0;
-                return {
-                    x: a.x + (b.x - a.x) * t,
-                    y: a.y + (b.y - a.y) * t
-                };
-            }
-            remaining -= length;
+  private trafficBlock(v:Vehicle,origin:XY,target:XY,speed:number,proposedHeading:number):boolean {
+    const safeFollowing=this.vehicleLength+this.gap+speed*this.timeHeadway;
+    const dx=target.x-origin.x,dy=target.y-origin.y,len2=dx*dx+dy*dy;
+    const direction={x:Math.cos(v.heading),y:Math.sin(v.heading)};
+    for(const other of this.vehicles){if(other===v)continue;
+      const p=other.state;
+      const t=len2>0?clamp(((p.x-origin.x)*dx+(p.y-origin.y)*dy)/len2,0,1):0;
+      const swept=Math.hypot(origin.x+dx*t-p.x,origin.y+dy*t-p.y);
+      // Narrow-area SAT: block predicted oriented body contact rather than
+      // applying a large circular distance to every direction.
+      if(swept < this.vehicleLength*1.6){
+        const midpoint={x:(origin.x+target.x)*.5,y:(origin.y+target.y)*.5};
+        if(this.footprintsConflict(target,proposedHeading,p,other.state.heading)
+          || this.footprintsConflict(midpoint,proposedHeading,p,other.state.heading))return true;
+      }
+      if(!other.active)continue;
+      const rx=p.x-origin.x,ry=p.y-origin.y;
+      const ahead=rx*direction.x+ry*direction.y;
+      const lateral=Math.abs(rx*direction.y-ry*direction.x);
+      if(ahead>0&&ahead<safeFollowing&&lateral<3.8)return true;
+    }
+    return false;
+  }
+
+  private onPath(points:XY[],s:number):XY {
+    if(!points.length)return{x:0,y:0};let d=Math.max(0,s);
+    for(let i=1;i<points.length;i++){const n=dist(points[i-1],points[i]);if(d<=n||i===points.length-1){const t=n>0?clamp(d/n,0,1):0;return{x:points[i-1].x+(points[i].x-points[i-1].x)*t,y:points[i-1].y+(points[i].y-points[i-1].y)*t};}d-=n;}
+    return {...points.at(-1)!};
+  }
+  private tangent(points:XY[],s:number):number {
+    let d=Math.max(0,s);
+    for(let i=1;i<points.length;i++){const a=points[i-1],b=points[i],n=dist(a,b);if(d<=n||i===points.length-1)return Math.atan2(b.y-a.y,b.x-a.x);d-=n;}
+    return 0;
+  }
+
+  private makeState(v:Vehicle,position:XY,progress:number,acceleration=0):AGVRuntimeState {
+    const seg=v.segments[v.phaseIndex],d=v.definition;
+    const park=v.segments[4].points[0];
+    const selected=v.variants.find(o=>o.yardId===v.assignedYardId);
+    const yard=selected?.yardSlot??this.yardSlots[Number.parseInt(d.id.match(/(\d+)$/)?.[1]??'1',10)-1]??park;
+    const unloading=v.segments[1].points.at(-1)??park;
+    const dwellFrac=seg.dwellSeconds?clamp(v.dwell/seg.dwellSeconds,0,1):0;
+    const inDwell=v.dwell>0;
+    const loading=(seg.phase==='QUAY_PICKUP'||(seg.phase==='RETURN_QUAY'&&this.continuousWorkload))&&inDwell;
+    const unloadingNow=seg.phase==='YARD_STACK'&&inDwell;
+    const loaded=seg.phase==='YARD_STACK'&& !unloadingNow;
+    const status=loading?'LOADING':unloadingNow?'UNLOADING':loaded?'LOADED':'EMPTY';
+    const cargoVisible=loading||loaded||unloadingNow;
+    const cargoX=unloadingNow?unloading.x+(yard.x-unloading.x)*dwellFrac:position.x;
+    const cargoY=unloadingNow?unloading.y+(yard.y-unloading.y)*dwellFrac:position.y;
+    const geog=this.coordinateSystem.localToGeo({...position,z:0});
+    const taskStatus= !v.active?'PARKING':loading?'LOADING':unloadingNow?'UNLOADING':loaded?'LOADED':(seg.phase==='RETURN_BUFFER'||seg.phase==='RETURN_QUAY')?'RETURNING':v.waitingForTraffic?'WAITING':'WORKING';
+    return {
+      id:d.id,assetId:d.assetId,x:position.x,y:position.y,
+      longitude:Number(geog.longitude.toFixed(8)),latitude:Number(geog.latitude.toFixed(8)),
+      heading:v.heading,speed:v.speed,acceleration,battery:Math.max(12,d.battery-(v.taskCompleted*8+(v.active?6*progress:0))),
+      phase:seg.phase,berthId:v.quayCraneId,yardId:v.assignedYardId,
+      parkingSlotId:`PARK-${String(Math.floor((d.parkingSlot-1)/31)+1).padStart(2,'0')}-${String((d.parkingSlot-1)%31+1).padStart(2,'0')}`,
+      energyStationId:d.energyStationId,taskId:v.active?`${d.taskId}-${v.taskNumber}`:'—',routeId:v.assignedRouteId,
+      containerId:`CNTR-${String(Number.parseInt(d.id.match(/(\d+)$/)?.[1]??'1',10)).padStart(7,'0')}`,
+      containerNo:`SYN${String(Number.parseInt(d.id.match(/(\d+)$/)?.[1]??'1',10)).padStart(7,'0')}`,
+      cargoStatus:status,phaseProgress:progress,taskStatus,cycleProgress:v.active?(v.phaseIndex+progress)/4:1,
+      yardX:yard.x,yardY:yard.y,cargoX,cargoY,cargoVisible,cargoAtYard:unloadingNow&&dwellFrac>=1,
+      cargoTransferProgress:unloadingNow||loading?dwellFrac:0,
+      cargoTransferKind:loading?'CRANE_TO_AGV':unloadingNow?'AGV_TO_YARD':'NONE',
+      hasTask:v.active,taskCompleted:v.taskCompleted,waitingForTraffic:v.waitingForTraffic
+    };
+  }
+
+  /** Complete current mission, including loaded and empty return legs. */
+  getLifecycleLegs(index:number):Array<{phase:AGVPhase;points:XY[]}> {
+    const v=this.vehicles[index];if(!v)return [];
+    return [0,1,2,3].map(i=>({phase:v.segments[i].phase,
+      points:v.segments[i].points.map(p=>({...p}))}));
+  }
+  /** Route geometry: the current assignment, not a pile of historical segments. */
+  getCurrentRoute(index:number):XY[] {
+    const v=this.vehicles[index];if(!v)return [];
+    const phases=[0,1,2,3];
+    return phases.flatMap((i,j)=>v.segments[i].points.slice(j?1:0).map(p=>({...p})));
+  }
+  /** All recorded positions are simulated; optionally return only actual motion
+   * since this page started (no preseeded synthetic history). */
+  getTravelledPath(index:number,limit=1400):XY[] {
+    const h=this.vehicles[index]?.history??[];
+    const live=h.filter(v=>v.source==='live-simulation');
+    const points=live.slice(-Math.max(1,limit));
+    return points.map(p=>({x:p.x,y:p.y}));
+  }
+  getHistoryPath(index:number):XY[] {
+    return this.getHistoryRecords(index).map(p=>({x:p.x,y:p.y}));
+  }
+  getHistoryRecords(index:number,limit=900):AGVTrackRecord[] {
+    const h=this.vehicles[index]?.history??[];
+    return h.slice(-Math.max(0,Math.min(this.historyLimit,limit))).map(record=>({...record}));
+  }
+  /** Simulation-only historical example. It never claims to be actual TOS telemetry. */
+  private seedSyntheticHistory(v:Vehicle):void {
+    // Three historical SIMULATED journeys through distinct available yard
+    // assignments. They are not surveyed GPS measurements.
+    const reverse=(s:AGVSegment,phase:AGVPhase):AGVSegment=>({phase,points:[...s.points].reverse().map(p=>({...p})),
+      speedMps:s.speedMps,dwellSeconds:0});
+    for(let journey=0;journey<3;journey++){
+      const option=v.variants[(journey+(v.definition.parkingSlot%Math.max(1,v.variants.length)))%Math.max(1,v.variants.length)];
+      const outbound=option?.segment??v.segments[1];
+      const paths=[v.segments[0],outbound,reverse(outbound,'RETURN_QUAY'),v.segments[3]];
+      const distances=paths.map(s=>s.points.slice(1).reduce((sum,p,i)=>sum+dist(p,s.points[i]),0));
+      const total=distances.reduce((a,b)=>a+b,0);
+      for(let i=0;i<200;i++){
+        const sample=journey*200+i;
+        let d=total*i/199,which=0;
+        while(which<3&&d>distances[which])d-=distances[which++];
+        const segment=paths[which],position=this.onPath(segment.points,d);
+        v.history.push({sample,simulatedSeconds:(sample-600)*this.sampleInterval,
+          x:position.x,y:position.y,speedMps:segment.speedMps,heading:this.tangent(segment.points,d),
+          phase:segment.phase,taskId:`${v.definition.taskId}-SYN-HIST-${journey+1}`,source:'synthetic-history'});
+      }
+    }
+    v.sampleNumber=600;
+  }
+  private appendSample(v:Vehicle,dt:number):void {
+    v.sampleClock+=dt;
+    if(v.sampleClock<this.sampleInterval)return;
+    v.sampleClock%=this.sampleInterval;
+    const s=v.state;
+    // Parked cars do not flood their history with thousands of identical points.
+    const last=v.history.at(-1);
+    if(!v.active&&last?.source==='live-simulation'&&Math.hypot(s.x-last.x,s.y-last.y)<.025)return;
+    v.history.push({sample:v.sampleNumber++,simulatedSeconds:this.clockSeconds,
+      x:s.x,y:s.y,speedMps:s.speed,heading:s.heading,phase:s.phase,
+      taskId:s.taskId,source:'live-simulation'});
+    if(v.history.length>this.historyLimit)v.history.splice(0,v.history.length-this.historyLimit);
+  }
+  /** Penalize corridors occupied by other active AGVs when planning. Planning
+   * happens at assignment time, not each frame; the motion controller performs
+   * the short-horizon collision avoidance independently. */
+  private corridorCost(points:XY[],vehicle:Vehicle):number {
+    let length=0;
+    for(let i=1;i<points.length;i++)length+=dist(points[i-1],points[i]);
+    if(!length)return 0;
+    let traffic=0;
+    for(const other of this.vehicles){
+      if(other===vehicle||!other.active)continue;
+      const pos=other.state;
+      for(let i=1;i<points.length;i++){
+        const a=points[i-1],b=points[i],dx=b.x-a.x,dy=b.y-a.y;
+        const t=clamp(((pos.x-a.x)*dx+(pos.y-a.y)*dy)/Math.max(1e-8,dx*dx+dy*dy),0,1);
+        if(Math.hypot(a.x+t*dx-pos.x,a.y+t*dy-pos.y)<13){traffic+=3;break;}
+      }
+    }
+    return length+traffic;
+  }
+
+  /** A* / Dijkstra on *validated QC link edges only*.  The route is recomputed
+   * per vehicle and task. No fabricated straight segment can cut through a yard. */
+  private findQuayPath(start:string,end:string,vehicle:Vehicle):{points:XY[];cost:number;edgeIds:string[]}|null {
+    if(!this.quayGraph.has(start)||!this.quayGraph.has(end))return null;
+    if(start===end){
+      return {points:[{...this.quayPositions.get(start)!}],cost:0,edgeIds:[]};
+    }
+    const best=new Map<string,number>([[start,0]]);
+    const previous=new Map<string,{from:string;edge:{to:string;points:XY[];length:number;id:string}}>();
+    const visited=new Set<string>();
+    while(true){
+      let node:string|undefined,score=Infinity;
+      for(const [candidate,d] of best)if(!visited.has(candidate)&&d<score){node=candidate;score=d;}
+      if(node===undefined)return null;
+      if(node===end)break;
+      visited.add(node);
+      for(const edge of this.quayGraph.get(node)??[]){
+        const preference=(([...vehicle.definition.id].reduce((a,c)=>Math.imul(a^c.charCodeAt(0),16777619)>>>0,2166136261)
+          ^ [...edge.id].reduce((a,c)=>Math.imul(a^c.charCodeAt(0),16777619)>>>0,2166136261))%97)/970;
+        const cost=this.corridorCost(edge.points,vehicle)+
+          (this.edgeReservations.get(edge.id)??0)*1.5+edge.length*preference;
+        const next=score+cost;
+        if(next<(best.get(edge.to)??Infinity)){
+          best.set(edge.to,next);previous.set(edge.to,{from:node,edge});
         }
-        return { ...points[points.length - 1] };
+      }
     }
+    const steps:Array<{points:XY[];id:string}>=[];
+    for(let node=end;node!==start;){
+      const step=previous.get(node);if(!step)return null;
+      steps.push({points:step.edge.points,id:step.edge.id});node=step.from;
+    }
+    steps.reverse();
+    const points=steps.flatMap((step,i)=>step.points.slice(i?1:0).map(p=>({...p})));
+    return {points,cost:best.get(end)!,edgeIds:steps.map(s=>s.id)};
+  }
 
-    private estimateBattery(base: number, phaseIndex: number, progress: number): number {
-        const outbound = phaseIndex <= 1 ? -22 * progress : 0;
-        const parked = phaseIndex === 2 ? -22 : 0;
-        const recharged = phaseIndex >= 3 ? 60 : 0;
-        return Math.max(15, Math.min(100, base + outbound + parked + recharged));
-    }
+  private joinPaths(a:XY[],b:XY[]):XY[] {
+    if(!a.length)return b.map(p=>({...p}));
+    if(!b.length)return a.map(p=>({...p}));
+    const all=a.map(p=>({...p}));
+    all.push(...b.slice(dist(a.at(-1)!,b[0])<.05?1:0).map(p=>({...p})));
+    return all.length===1?[all[0],{...all[0]}]:all;
+  }
 
-    private idNumber(id: string): number {
-        const value = Number.parseInt(id.match(/(\d+)$/)?.[1] ?? "1", 10);
-        return Number.isFinite(value) ? value : 1;
+  /** Personalized per-assignment path planning: each AGV begins at its own
+   * parking/QC position, searches available QC links, chooses an actual GIS
+   * corridor to its selected yard, and receives a unique route/task ID.
+   * The target yard is rotated reproducibly for test coverage; the approach
+   * QC is chosen by path cost, traffic, and existing corridor reservations.
+   * All links are synthetic unless separately surveyed and certified. */
+  private chooseVariant(v:Vehicle,fromQuay=false):void {
+    if(!v.variants.length)return;
+    const hash=[...v.definition.id].reduce((h,ch)=>Math.imul(h^ch.charCodeAt(0),16777619)>>>0,2166136261);
+    const index=(hash%v.variants.length+(Math.max(1,v.taskNumber)-1)*(v.variants.length-1))%v.variants.length;
+    const choice=v.variants[index];
+    const startQuay=fromQuay?v.currentQuayCraneId:v.homeQuayCraneId;
+    let selected:{quay:string;segment:AGVSegment;yardSlot:XY;routeId:string}|null=null;
+    let navigation:{points:XY[];cost:number;edgeIds:string[]}|null=null;
+    let minimum=Infinity;
+    for(const entrance of this.yardEntrances.get(choice.yardId)??[]){
+      const path=this.findQuayPath(startQuay,entrance.quay,v);
+      if(!path)continue;
+      const cost=path.cost+this.corridorCost(entrance.segment.points,v)+
+        (this.edgeReservations.get(entrance.routeId)??0)*2;
+      if(cost<minimum){minimum=cost;selected=entrance;navigation=path;}
     }
-
-    private polylinePrefix(points: XY[], distance: number): XY[] {
-        if (points.length === 0) return [];
-        const out: XY[] = [{ ...points[0] }];
-        let remaining = Math.max(0, distance);
-        for (let i = 1; i < points.length; i++) {
-            const a = points[i - 1];
-            const b = points[i];
-            const length = this.distance(a, b);
-            if (remaining <= length) {
-                const t = length > 0 ? remaining / length : 0;
-                out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
-                break;
-            }
-            out.push({ ...b });
-            remaining -= length;
-        }
-        return out;
+    if(!selected||!navigation){
+      // The V8 prevalidated synthetic variant is the safe fallback for a yard
+      // whose optional QC network cannot find a route. Do not draw a new line.
+      selected={quay:startQuay,segment:choice.segment,yardSlot:choice.yardSlot,routeId:choice.routeId};
+      navigation={points:[v.homePickup.points.at(-1)!],cost:0,edgeIds:[]};
     }
-
-    private dedupeHistory(points: XY[]): XY[] {
-        const out: XY[] = [];
-        for (const point of points) {
-            const last = out[out.length - 1];
-            if (!last || this.distance(last, point) > 0.15) out.push({ ...point });
-        }
-        return out;
-    }
-
-    private distance(a: XY, b: XY): number {
-        return Math.hypot(a.x - b.x, a.y - b.y);
-    }
+    const quayApproach=navigation.points.length?navigation.points:[v.homePickup.points.at(-1)!];
+    const parkingToPickup=this.joinPaths(v.homePickup.points,
+      fromQuay?this.findQuayPath(v.homeQuayCraneId,selected.quay,v)?.points??quayApproach:quayApproach);
+    const pickupApproach=fromQuay?this.joinPaths(
+      [v.segments[2].points.at(-1)!],quayApproach):parkingToPickup;
+    const outbound=selected.segment.points.map(p=>({...p}));
+    // Prevent disguised teleports when an incorrectly encoded GIS corridor
+    // does not share the selected QC endpoint.
+    if(dist(pickupApproach.at(-1)!,outbound[0])>.1)throw Error(`Disconnected QC handoff for ${v.definition.id}`);
+    v.quayCraneId=selected.quay;
+    v.assignedYardId=choice.yardId;
+    v.assignedRouteId=`PLAN-${v.definition.id}-${v.taskNumber}-${selected.quay}-${choice.yardId}`;
+    v.segments[0]={phase:'QUAY_PICKUP',points:pickupApproach,speedMps:v.homePickup.speedMps,
+      dwellSeconds:v.homePickup.dwellSeconds};
+    v.segments[1]={phase:'YARD_STACK',points:outbound,speedMps:selected.segment.speedMps,dwellSeconds:selected.segment.dwellSeconds};
+    v.segments[2]={phase:'RETURN_QUAY',points:outbound.slice().reverse().map(p=>({...p})),
+      speedMps:selected.segment.speedMps,dwellSeconds:0};
+    v.segments[3]={phase:'RETURN_BUFFER',points:parkingToPickup.slice().reverse().map(p=>({...p})),
+      speedMps:v.homePickup.speedMps,dwellSeconds:0};
+    for(const i of [0,1,2,3])v.phaseDistances[i]=v.segments[i].points.slice(1)
+      .reduce((sum,p,j)=>sum+dist(p,v.segments[i].points[j]),0);
+    for(const id of [...navigation.edgeIds,selected.routeId])
+      this.edgeReservations.set(id,(this.edgeReservations.get(id)??0)+1);
+  }
+  setContinuousWorkload(enabled:boolean):void {this.continuousWorkload=enabled;}
+  getContinuousWorkload():boolean{return this.continuousWorkload;}
+  setRunning(running:boolean):void{this.running=running;}
+  isRunning():boolean{return this.running;}
+  setSimulationSpeed(speed:number):void{this.simulationSpeed=clamp(speed,.1,8);}
+  getSimulationSpeed():number{return this.simulationSpeed;}
+  getSelectedState(index=77):AGVRuntimeState|null{return this.vehicles[index]?.state??null;}
+  getCycleProgress(index:number):number{return this.vehicles[index]?.state.cycleProgress??0;}
+  getStats(){let moving=0,parking=0,charging=0,returnBuffer=0,yardStack=0,battery=0,waiting=0;
+    for(const v of this.vehicles){const s=v.state;battery+=s.battery;if(!v.active)parking++;else if(s.phase==='CHARGING')charging++;else{
+      if(s.speed>.02)moving++;if(s.waitingForTraffic)waiting++;if(s.phase==='RETURN_BUFFER')returnBuffer++;if(s.phase==='YARD_STACK')yardStack++;}}
+    return {total:this.vehicles.length,active:this.vehicles.filter(v=>v.active).length,moving,parking,charging,returnBuffer,yardStack,waiting,
+      avgBattery:this.vehicles.length?battery/this.vehicles.length:0};
+  }
 }
